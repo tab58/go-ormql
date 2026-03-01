@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: "3"
+
+vars:
+  GREETING: Hello, world!
+
+tasks:
+  run:
+    desc: Run the example application
+    cmds:
+      - go run cmd/example/main.go
+    silent: true

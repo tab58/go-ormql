@@ -1,0 +1,126 @@
+type Actor {
+  id: ID!
+  name: String!
+}
+
+type Movie {
+  id: ID!
+  title: String!
+  released: Int
+}
+
+input ActorWhere {
+  id: ID
+  name: String
+}
+
+input ActorCreateInput {
+  name: String!
+  movies: ActorMoviesFieldInput
+}
+
+input ActorUpdateInput {
+  name: String
+}
+
+type CreateActorsMutationResponse {
+  actors: [Actor!]!
+}
+
+type UpdateActorsMutationResponse {
+  actors: [Actor!]!
+}
+
+type ActorsConnection {
+  edges: [ActorEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ActorEdge {
+  node: Actor!
+  cursor: String!
+}
+
+input MovieWhere {
+  id: ID
+  title: String
+  released: Int
+}
+
+input MovieCreateInput {
+  title: String!
+  released: Int
+}
+
+input MovieUpdateInput {
+  title: String
+  released: Int
+}
+
+type CreateMoviesMutationResponse {
+  movies: [Movie!]!
+}
+
+type UpdateMoviesMutationResponse {
+  movies: [Movie!]!
+}
+
+type MoviesConnection {
+  edges: [MovieEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type MovieEdge {
+  node: Movie!
+  cursor: String!
+}
+
+input ActorMoviesFieldInput {
+  create: [ActorMoviesCreateFieldInput!]
+  connect: [ActorMoviesConnectFieldInput!]
+}
+
+input ActorMoviesCreateFieldInput {
+  node: MovieCreateInput!
+  edge: ActedInPropertiesCreateInput
+}
+
+input ActorMoviesConnectFieldInput {
+  where: MovieWhere
+  edge: ActedInPropertiesCreateInput
+}
+
+input ActedInPropertiesCreateInput {
+  role: String!
+}
+
+type DeleteInfo {
+  nodesDeleted: Int!
+  relationshipsDeleted: Int!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type Query {
+  actors(where: ActorWhere): [Actor!]!
+  actorsConnection(first: Int, after: String, where: ActorWhere): ActorsConnection!
+  movies(where: MovieWhere): [Movie!]!
+  moviesConnection(first: Int, after: String, where: MovieWhere): MoviesConnection!
+}
+
+type Mutation {
+  createActors(input: [ActorCreateInput!]!): CreateActorsMutationResponse!
+  updateActors(where: ActorWhere, update: ActorUpdateInput): UpdateActorsMutationResponse!
+  deleteActors(where: ActorWhere): DeleteInfo!
+  createMovies(input: [MovieCreateInput!]!): CreateMoviesMutationResponse!
+  updateMovies(where: MovieWhere, update: MovieUpdateInput): UpdateMoviesMutationResponse!
+  deleteMovies(where: MovieWhere): DeleteInfo!
+}
+

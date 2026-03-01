@@ -1,0 +1,20 @@
+type Movie @node {
+  id: ID!
+  title: String!
+  released: Int
+}
+
+type Actor @node {
+  id: ID!
+  name: String!
+  movies: [Movie!]!
+    @relationship(
+      type: "ACTED_IN"
+      direction: OUT
+      properties: "ActedInProperties"
+    )
+}
+
+type ActedInProperties @relationshipProperties {
+  role: String!
+}
