@@ -225,6 +225,163 @@ func TestRelationshipsForNode_ReturnsCopies(t *testing.T) {
 	}
 }
 
+// TestRelationshipsForNode_PropertiesDeepCopy_FieldsMutation verifies that mutating
+// Properties.Fields on a returned RelationshipDefinition does NOT affect the original
+// GraphModel. This is the core M1 fix — Properties *PropertiesDefinition must be deep-copied.
+// Expected: original model's Properties.Fields remains unchanged after mutation.
+func TestRelationshipsForNode_PropertiesDeepCopy_FieldsMutation(t *testing.T) {
+	model := GraphModel{
+		Relationships: []RelationshipDefinition{
+			{
+				FieldName: "actedIn",
+				RelType:   "ACTED_IN",
+				Direction: DirectionOUT,
+				FromNode:  "Actor",
+				ToNode:    "Movie",
+				Properties: &PropertiesDefinition{
+					TypeName: "ActedInProperties",
+					Fields: []FieldDefinition{
+						{Name: "role", GraphQLType: "String!", GoType: "string", CypherType: "STRING"},
+						{Name: "year", GraphQLType: "Int!", GoType: "int", CypherType: "INTEGER"},
+					},
+				},
+			},
+		},
+	}
+
+	// Get relationships and mutate the Properties.Fields slice
+	rels := model.RelationshipsForNode("Actor")
+	if len(rels) != 1 {
+		t.Fatalf("RelationshipsForNode(\"Actor\") returned %d rels, want 1", len(rels))
+	}
+	if rels[0].Properties == nil {
+		t.Fatal("returned relationship has nil Properties, want non-nil")
+	}
+
+	// Mutate the returned Properties.Fields — should NOT affect the original
+	rels[0].Properties.Fields[0].Name = "MUTATED_FIELD"
+	rels[0].Properties.Fields = append(rels[0].Properties.Fields, FieldDefinition{Name: "extra"})
+
+	// Verify original is unchanged
+	originalRels := model.RelationshipsForNode("Actor")
+	if originalRels[0].Properties.Fields[0].Name != "role" {
+		t.Errorf("original Properties.Fields[0].Name = %q, want %q — deep copy violated",
+			originalRels[0].Properties.Fields[0].Name, "role")
+	}
+	if len(originalRels[0].Properties.Fields) != 2 {
+		t.Errorf("original Properties.Fields has %d entries, want 2 — append leaked through shared slice",
+			len(originalRels[0].Properties.Fields))
+	}
+}
+
+// TestRelationshipsForNode_PropertiesDeepCopy_TypeNameMutation verifies that mutating
+// Properties.TypeName on a returned RelationshipDefinition does NOT affect the original model.
+// Expected: original model's Properties.TypeName remains unchanged.
+func TestRelationshipsForNode_PropertiesDeepCopy_TypeNameMutation(t *testing.T) {
+	model := GraphModel{
+		Relationships: []RelationshipDefinition{
+			{
+				FieldName: "actedIn",
+				RelType:   "ACTED_IN",
+				Direction: DirectionOUT,
+				FromNode:  "Actor",
+				ToNode:    "Movie",
+				Properties: &PropertiesDefinition{
+					TypeName: "ActedInProperties",
+					Fields:   []FieldDefinition{{Name: "role", GraphQLType: "String!"}},
+				},
+			},
+		},
+	}
+
+	rels := model.RelationshipsForNode("Actor")
+	rels[0].Properties.TypeName = "MUTATED_TYPE"
+
+	// Verify original is unchanged
+	originalRels := model.RelationshipsForNode("Actor")
+	if originalRels[0].Properties.TypeName != "ActedInProperties" {
+		t.Errorf("original Properties.TypeName = %q, want %q — pointer shared with model",
+			originalRels[0].Properties.TypeName, "ActedInProperties")
+	}
+}
+
+// TestRelationshipsForNode_NilProperties_NoPanic verifies that relationships with
+// nil Properties are returned without panic or error. Properties should remain nil.
+// Expected: Properties is nil on the returned relationship.
+func TestRelationshipsForNode_NilProperties_NoPanic(t *testing.T) {
+	model := GraphModel{
+		Relationships: []RelationshipDefinition{
+			{
+				FieldName: "actedIn",
+				RelType:   "ACTED_IN",
+				Direction: DirectionOUT,
+				FromNode:  "Actor",
+				ToNode:    "Movie",
+				Properties: nil, // no @relationshipProperties
+			},
+		},
+	}
+
+	rels := model.RelationshipsForNode("Actor")
+	if len(rels) != 1 {
+		t.Fatalf("RelationshipsForNode(\"Actor\") returned %d rels, want 1", len(rels))
+	}
+	if rels[0].Properties != nil {
+		t.Errorf("Properties = %v, want nil for relationship without @relationshipProperties", rels[0].Properties)
+	}
+}
+
+// TestRelationshipsForNode_MultiplePropertiesIndependent verifies that when multiple
+// relationships with Properties are returned, each Properties is an independent copy.
+// Expected: mutating one relationship's Properties does not affect another.
+func TestRelationshipsForNode_MultiplePropertiesIndependent(t *testing.T) {
+	model := GraphModel{
+		Relationships: []RelationshipDefinition{
+			{
+				FieldName: "actedIn",
+				RelType:   "ACTED_IN",
+				Direction: DirectionOUT,
+				FromNode:  "Actor",
+				ToNode:    "Movie",
+				Properties: &PropertiesDefinition{
+					TypeName: "ActedInProperties",
+					Fields:   []FieldDefinition{{Name: "role", GraphQLType: "String!"}},
+				},
+			},
+			{
+				FieldName: "directed",
+				RelType:   "DIRECTED",
+				Direction: DirectionOUT,
+				FromNode:  "Actor",
+				ToNode:    "Movie",
+				Properties: &PropertiesDefinition{
+					TypeName: "DirectedProperties",
+					Fields:   []FieldDefinition{{Name: "year", GraphQLType: "Int!"}},
+				},
+			},
+		},
+	}
+
+	rels := model.RelationshipsForNode("Actor")
+	if len(rels) != 2 {
+		t.Fatalf("RelationshipsForNode(\"Actor\") returned %d rels, want 2", len(rels))
+	}
+
+	// Mutate first relationship's Properties
+	rels[0].Properties.TypeName = "MUTATED"
+
+	// Verify second relationship's Properties is unaffected
+	freshRels := model.RelationshipsForNode("Actor")
+	if freshRels[0].Properties.TypeName != "ActedInProperties" {
+		t.Errorf("freshRels[0].Properties.TypeName = %q, want %q",
+			freshRels[0].Properties.TypeName, "ActedInProperties")
+	}
+	if freshRels[1].Properties.TypeName != "DirectedProperties" {
+		t.Errorf("freshRels[1].Properties.TypeName = %q, want %q",
+			freshRels[1].Properties.TypeName, "DirectedProperties")
+	}
+}
+
 // TestValueTypeSemantics verifies that struct types behave as value types —
 // copying a NodeDefinition creates an independent copy.
 func TestValueTypeSemantics(t *testing.T) {

@@ -104,11 +104,19 @@ func (m GraphModel) NodeByName(name string) (NodeDefinition, bool) {
 }
 
 // RelationshipsForNode returns all relationships where FromNode or ToNode matches the given name.
-// Returns copies of the RelationshipDefinitions.
+// Returns deep copies of the RelationshipDefinitions, including Properties.
 func (m GraphModel) RelationshipsForNode(nodeName string) []RelationshipDefinition {
 	var result []RelationshipDefinition
 	for _, r := range m.Relationships {
 		if r.FromNode == nodeName || r.ToNode == nodeName {
+			if r.Properties != nil {
+				fields := make([]FieldDefinition, len(r.Properties.Fields))
+				copy(fields, r.Properties.Fields)
+				r.Properties = &PropertiesDefinition{
+					TypeName: r.Properties.TypeName,
+					Fields:   fields,
+				}
+			}
 			result = append(result, r)
 		}
 	}

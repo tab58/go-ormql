@@ -3,12 +3,18 @@ package neo4j
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/tab58/gql-orm/pkg/cypher"
 	"github.com/tab58/gql-orm/pkg/driver"
 )
+
+// contains checks if s contains substr (test helper).
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
 
 // --- Mock types ---
 
@@ -520,6 +526,165 @@ func TestBeginTx_AfterClose_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("BeginTx after Close should return error")
 	}
+}
+
+// === M2: neo4jTransaction mutex + Execute-after-commit guard tests ===
+
+// TestTx_ExecuteAfterCommit_ReturnsError verifies that calling Execute after
+// Commit returns a "transaction already committed" error. The underlying
+// transactionRunner.Run must NOT be called.
+// Expected: error containing "transaction already committed".
+func TestTx_ExecuteAfterCommit_ReturnsError(t *testing.T) {
+	runCalled := false
+	session := &mockSessionRunner{
+		beginTransactionFn: func(_ context.Context) (transactionRunner, error) {
+			return &mockTransactionRunner{
+				runFn: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+					runCalled = true
+					return []map[string]any{{"n": 1}}, nil
+				},
+			}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	drv := newFromDB(db, "neo4j")
+
+	tx, err := drv.BeginTx(context.Background())
+	if err != nil {
+		t.Fatalf("BeginTx returned error: %v", err)
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(context.Background()); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
+	}
+
+	// Execute after Commit should return error
+	stmt := cypher.Statement{Query: "MATCH (n) RETURN n"}
+	_, err = tx.Execute(context.Background(), stmt)
+	if err == nil {
+		t.Fatal("Execute after Commit should return error")
+	}
+	if !errors.Is(err, nil) && err.Error() != "transaction already committed" {
+		// Accept any error message containing "committed"
+		if !contains(err.Error(), "committed") {
+			t.Errorf("error = %q, want message containing \"committed\"", err.Error())
+		}
+	}
+	if runCalled {
+		t.Error("underlying transactionRunner.Run was called after Commit — must be guarded")
+	}
+}
+
+// TestTx_ConcurrentExecuteAndCommit verifies that concurrent Execute and Commit
+// calls on neo4jTransaction do not race. This exercises the sync.Mutex on the
+// committed field.
+// Expected: no data race detected by -race flag. Some Execute calls may error, but no panic.
+func TestTx_ConcurrentExecuteAndCommit(t *testing.T) {
+	session := &mockSessionRunner{
+		beginTransactionFn: func(_ context.Context) (transactionRunner, error) {
+			return &mockTransactionRunner{
+				runFn: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+					return []map[string]any{{"n": 1}}, nil
+				},
+			}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	drv := newFromDB(db, "neo4j")
+
+	tx, err := drv.BeginTx(context.Background())
+	if err != nil {
+		t.Fatalf("BeginTx returned error: %v", err)
+	}
+
+	stmt := cypher.Statement{Query: "MATCH (n) RETURN n"}
+
+	var wg sync.WaitGroup
+	// Launch concurrent Execute and Commit calls
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			tx.Execute(context.Background(), stmt)
+		}()
+		go func() {
+			defer wg.Done()
+			tx.Commit(context.Background())
+		}()
+	}
+	wg.Wait()
+	// If we reach here without a data race, the test passes.
+}
+
+// TestTx_ConcurrentExecuteAndRollback verifies that concurrent Execute and
+// Rollback calls on neo4jTransaction do not race.
+// Expected: no data race detected by -race flag.
+func TestTx_ConcurrentExecuteAndRollback(t *testing.T) {
+	session := &mockSessionRunner{
+		beginTransactionFn: func(_ context.Context) (transactionRunner, error) {
+			return &mockTransactionRunner{
+				runFn: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+					return []map[string]any{{"n": 1}}, nil
+				},
+			}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	drv := newFromDB(db, "neo4j")
+
+	tx, err := drv.BeginTx(context.Background())
+	if err != nil {
+		t.Fatalf("BeginTx returned error: %v", err)
+	}
+
+	stmt := cypher.Statement{Query: "MATCH (n) RETURN n"}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			tx.Execute(context.Background(), stmt)
+		}()
+		go func() {
+			defer wg.Done()
+			tx.Rollback(context.Background())
+		}()
+	}
+	wg.Wait()
+}
+
+// TestTx_ConcurrentCommitAndRollback verifies that concurrent Commit and
+// Rollback calls on neo4jTransaction do not race.
+// Expected: no data race detected by -race flag.
+func TestTx_ConcurrentCommitAndRollback(t *testing.T) {
+	session := &mockSessionRunner{
+		beginTransactionFn: func(_ context.Context) (transactionRunner, error) {
+			return &mockTransactionRunner{}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	drv := newFromDB(db, "neo4j")
+
+	tx, err := drv.BeginTx(context.Background())
+	if err != nil {
+		t.Fatalf("BeginTx returned error: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			tx.Commit(context.Background())
+		}()
+		go func() {
+			defer wg.Done()
+			tx.Rollback(context.Background())
+		}()
+	}
+	wg.Wait()
 }
 
 // TestNeo4jDriver_ConcurrentCloseAndExecute verifies that concurrent Close

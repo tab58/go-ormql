@@ -2,6 +2,7 @@ package neo4j
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -9,6 +10,9 @@ import (
 	"github.com/tab58/gql-orm/pkg/cypher"
 	"github.com/tab58/gql-orm/pkg/driver"
 )
+
+// errTransactionCommitted is returned when Execute is called on a committed transaction.
+var errTransactionCommitted = errors.New("transaction already committed")
 
 // sessionRunner abstracts the neo4j session operations we actually use.
 // This narrow interface makes the adapter testable without mocking the full neo4j session.
@@ -143,14 +147,28 @@ func (d *Neo4jDriver) Close(ctx context.Context) error {
 
 // neo4jTransaction wraps a transactionRunner to implement driver.Transaction.
 type neo4jTransaction struct {
+	mu        sync.Mutex
 	tx        transactionRunner
 	session   sessionRunner
 	logger    *slog.Logger
 	committed bool
 }
 
+// isCommitted reports whether the transaction has been committed.
+// Thread-safe: reads the committed flag under the mutex.
+func (t *neo4jTransaction) isCommitted() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.committed
+}
+
 // Execute runs a query within the open transaction.
+// Returns an error if the transaction has already been committed.
 func (t *neo4jTransaction) Execute(ctx context.Context, stmt cypher.Statement) (driver.Result, error) {
+	if t.isCommitted() {
+		return driver.Result{}, errTransactionCommitted
+	}
+
 	if t.logger != nil {
 		t.logger.Debug("cypher.execute", "query", stmt.Query, "params", stmt.Params)
 	}
@@ -164,19 +182,28 @@ func (t *neo4jTransaction) Execute(ctx context.Context, stmt cypher.Statement) (
 
 // Commit commits all operations in the transaction.
 func (t *neo4jTransaction) Commit(ctx context.Context) error {
+	if t.isCommitted() {
+		return nil
+	}
+
 	if err := t.tx.Commit(ctx); err != nil {
 		return fmt.Errorf("tx commit: %w", err)
 	}
+
+	t.mu.Lock()
 	t.committed = true
+	t.mu.Unlock()
+
 	t.session.Close(ctx)
 	return nil
 }
 
 // Rollback aborts the transaction. Safe to call after Commit (no-op).
 func (t *neo4jTransaction) Rollback(ctx context.Context) error {
-	if t.committed {
+	if t.isCommitted() {
 		return nil
 	}
+
 	if err := t.tx.Rollback(ctx); err != nil {
 		return fmt.Errorf("tx rollback: %w", err)
 	}
