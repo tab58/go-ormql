@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -263,4 +264,65 @@ func TestExecute_ConcurrentCalls_AreSafe(t *testing.T) {
 	}
 	wg.Wait()
 	// If we reach here without a race or panic, the test passes.
+}
+
+// === M3: New() panics on nil schema ===
+
+// TestNew_NilSchema_Panics verifies that New() panics when schema is nil.
+// After removing the directExecute path, a nil schema is invalid because
+// there is no fallback execution path. Callers must provide a non-nil
+// graphql.ExecutableSchema (typically produced by generated code).
+// Expected: New(nil, drv) panics. Currently FAILS because New does NOT panic.
+func TestNew_NilSchema_Panics(t *testing.T) {
+	drv := &mockDriver{}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("New(nil, drv) should panic when schema is nil, but did not panic")
+		}
+	}()
+
+	New(nil, drv)
+}
+
+// TestNew_NilSchema_PanicMessage verifies that the panic from New(nil, drv)
+// includes a descriptive message so callers can diagnose the issue.
+// Expected: panic value contains "schema" in the message.
+func TestNew_NilSchema_PanicMessage(t *testing.T) {
+	drv := &mockDriver{}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("New(nil, drv) should panic, but did not")
+			return
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value should be a string, got %T: %v", r, r)
+		}
+		if !strings.Contains(strings.ToLower(msg), "schema") {
+			t.Errorf("panic message should mention 'schema', got: %q", msg)
+		}
+	}()
+
+	New(nil, drv)
+}
+
+// TestNew_NilSchema_WithOptions_Panics verifies that New(nil, drv, opts...)
+// still panics even when options are provided — the schema nil check runs
+// before options are applied.
+// Expected: panic before any option processing.
+func TestNew_NilSchema_WithOptions_Panics(t *testing.T) {
+	drv := &mockDriver{}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("New(nil, drv, WithLogger(...)) should panic when schema is nil")
+		}
+	}()
+
+	New(nil, drv, WithLogger(nil))
 }

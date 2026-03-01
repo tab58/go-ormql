@@ -6,11 +6,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/99designs/gqlgen/api"
 	gqlgenConfig "github.com/99designs/gqlgen/codegen/config"
 	"gopkg.in/yaml.v3"
 )
+
+// gqlgenMu serializes InvokeGqlgen calls. gqlgen requires CWD = output dir
+// (via os.Chdir), so concurrent Generate() calls must be serialized.
+var gqlgenMu sync.Mutex
 
 // GqlgenConfig holds the paths needed to generate a gqlgen.yml configuration.
 type GqlgenConfig struct {
@@ -145,6 +150,10 @@ func InvokeGqlgen(configPath string) error {
 
 	// gqlgen uses go/packages which resolves from CWD. Change to the output
 	// directory so it can find the go.mod and resolve the package.
+	// Serialize with gqlgenMu since os.Chdir affects the entire process.
+	gqlgenMu.Lock()
+	defer gqlgenMu.Unlock()
+
 	origDir, err := os.Getwd()
 	if err != nil {
 		cleanupTempFiles(tempFiles)

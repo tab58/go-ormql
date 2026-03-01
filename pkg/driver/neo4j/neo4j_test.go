@@ -3,6 +3,7 @@ package neo4j
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -10,11 +11,6 @@ import (
 	"github.com/tab58/gql-orm/pkg/cypher"
 	"github.com/tab58/gql-orm/pkg/driver"
 )
-
-// contains checks if s contains substr (test helper).
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
-}
 
 // --- Mock types ---
 
@@ -567,7 +563,7 @@ func TestTx_ExecuteAfterCommit_ReturnsError(t *testing.T) {
 	}
 	if !errors.Is(err, nil) && err.Error() != "transaction already committed" {
 		// Accept any error message containing "committed"
-		if !contains(err.Error(), "committed") {
+		if !strings.Contains(err.Error(), "committed") {
 			t.Errorf("error = %q, want message containing \"committed\"", err.Error())
 		}
 	}
@@ -715,4 +711,284 @@ func TestNeo4jDriver_ConcurrentCloseAndExecute(t *testing.T) {
 	}
 	wg.Wait()
 	// If we reach here without a data race, the test passes.
+}
+
+// === L-neo4j: Additional unit tests for coverage ===
+
+// TestExecuteWrite_AfterClose verifies that ExecuteWrite after Close returns a
+// "driver is closed" error (exercises checkClosed in the ExecuteWrite path).
+// Expected: non-nil error.
+func TestExecuteWrite_AfterClose(t *testing.T) {
+	session := &mockSessionRunner{}
+	db := &mockNeo4jDB{session: session}
+	drv := newFromDB(db, "neo4j")
+
+	drv.Close(context.Background())
+
+	stmt := cypher.Statement{Query: "CREATE (n:Movie {title: $title}) RETURN n"}
+	_, err := drv.ExecuteWrite(context.Background(), stmt)
+	if err == nil {
+		t.Fatal("ExecuteWrite after Close should return error")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Errorf("error = %q, want message containing \"closed\"", err.Error())
+	}
+}
+
+// TestExecute_WithLogger verifies that Execute logs the Cypher query when
+// a logger is configured (covers the logger branch in Execute).
+// Expected: Execute succeeds, debug log is emitted (no panic).
+func TestExecute_WithLogger(t *testing.T) {
+	session := &mockSessionRunner{
+		executeReadFn: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+			return []map[string]any{{"title": "Matrix"}}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	logger := slog.Default()
+	drv := newFromDBWithLogger(db, "neo4j", logger)
+
+	stmt := cypher.Statement{
+		Query:  "MATCH (n:Movie) RETURN n",
+		Params: map[string]any{"title": "Matrix"},
+	}
+
+	result, err := drv.Execute(context.Background(), stmt)
+	if err != nil {
+		t.Fatalf("Execute with logger returned error: %v", err)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("len(Records) = %d, want 1", len(result.Records))
+	}
+}
+
+// TestExecuteWrite_WithLogger verifies that ExecuteWrite logs the Cypher query
+// when a logger is configured (covers the logger branch in ExecuteWrite).
+// Expected: ExecuteWrite succeeds, debug log is emitted (no panic).
+func TestExecuteWrite_WithLogger(t *testing.T) {
+	session := &mockSessionRunner{
+		executeWriteFn: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+			return []map[string]any{{"title": "New Movie"}}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	logger := slog.Default()
+	drv := newFromDBWithLogger(db, "neo4j", logger)
+
+	stmt := cypher.Statement{
+		Query:  "CREATE (n:Movie {title: $title}) RETURN n",
+		Params: map[string]any{"title": "New Movie"},
+	}
+
+	result, err := drv.ExecuteWrite(context.Background(), stmt)
+	if err != nil {
+		t.Fatalf("ExecuteWrite with logger returned error: %v", err)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("len(Records) = %d, want 1", len(result.Records))
+	}
+}
+
+// TestTx_Execute_WithLogger verifies that neo4jTransaction.Execute logs the
+// query when a logger is configured (covers the logger branch in tx.Execute).
+// Expected: Execute succeeds, debug log is emitted (no panic).
+func TestTx_Execute_WithLogger(t *testing.T) {
+	session := &mockSessionRunner{
+		beginTransactionFn: func(_ context.Context) (transactionRunner, error) {
+			return &mockTransactionRunner{
+				runFn: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+					return []map[string]any{{"title": "Matrix"}}, nil
+				},
+			}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	logger := slog.Default()
+	drv := newFromDBWithLogger(db, "neo4j", logger)
+
+	tx, err := drv.BeginTx(context.Background())
+	if err != nil {
+		t.Fatalf("BeginTx returned error: %v", err)
+	}
+
+	stmt := cypher.Statement{Query: "MATCH (n:Movie) RETURN n"}
+	result, err := tx.Execute(context.Background(), stmt)
+	if err != nil {
+		t.Fatalf("tx.Execute with logger returned error: %v", err)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("len(Records) = %d, want 1", len(result.Records))
+	}
+}
+
+// TestTx_Commit_PropagatesError verifies that Commit propagates errors from
+// the underlying transactionRunner.Commit.
+// Expected: non-nil error.
+func TestTx_Commit_PropagatesError(t *testing.T) {
+	session := &mockSessionRunner{
+		beginTransactionFn: func(_ context.Context) (transactionRunner, error) {
+			return &mockTransactionRunner{
+				commitFn: func(_ context.Context) error {
+					return errors.New("commit failed")
+				},
+			}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	drv := newFromDB(db, "neo4j")
+
+	tx, err := drv.BeginTx(context.Background())
+	if err != nil {
+		t.Fatalf("BeginTx returned error: %v", err)
+	}
+
+	err = tx.Commit(context.Background())
+	if err == nil {
+		t.Fatal("tx.Commit should propagate underlying error")
+	}
+	if !strings.Contains(err.Error(), "commit") {
+		t.Errorf("error = %q, want message containing \"commit\"", err.Error())
+	}
+}
+
+// TestTx_Rollback_PropagatesError verifies that Rollback propagates errors from
+// the underlying transactionRunner.Rollback.
+// Expected: non-nil error.
+func TestTx_Rollback_PropagatesError(t *testing.T) {
+	session := &mockSessionRunner{
+		beginTransactionFn: func(_ context.Context) (transactionRunner, error) {
+			return &mockTransactionRunner{
+				rollbackFn: func(_ context.Context) error {
+					return errors.New("rollback failed")
+				},
+			}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	drv := newFromDB(db, "neo4j")
+
+	tx, err := drv.BeginTx(context.Background())
+	if err != nil {
+		t.Fatalf("BeginTx returned error: %v", err)
+	}
+
+	err = tx.Rollback(context.Background())
+	if err == nil {
+		t.Fatal("tx.Rollback should propagate underlying error")
+	}
+	if !strings.Contains(err.Error(), "rollback") {
+		t.Errorf("error = %q, want message containing \"rollback\"", err.Error())
+	}
+}
+
+// TestFlattenRows verifies the flattenRows helper with table-driven edge cases.
+// Expected: each input maps to the expected driver.Result.
+func TestFlattenRows(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          []map[string]any
+		expectedLen    int
+		checkFirstKey  string
+		checkFirstVal  any
+	}{
+		// Empty input produces empty records slice.
+		{"empty input", []map[string]any{}, 0, "", nil},
+		// Nil input produces empty records slice.
+		{"nil input", nil, 0, "", nil},
+		// Single record with one key.
+		{"single record", []map[string]any{{"title": "Matrix"}}, 1, "title", "Matrix"},
+		// Multiple records.
+		{
+			"multiple records",
+			[]map[string]any{
+				{"title": "Matrix"},
+				{"title": "Inception"},
+				{"title": "Interstellar"},
+			},
+			3, "title", "Matrix",
+		},
+		// Record with nil value preserves the nil.
+		{"nil value in record", []map[string]any{{"tagline": nil}}, 1, "tagline", nil},
+		// Record with multiple keys.
+		{"multi-key record", []map[string]any{{"title": "Matrix", "released": int64(1999)}}, 1, "title", "Matrix"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := flattenRows(tt.input)
+			if len(result.Records) != tt.expectedLen {
+				t.Fatalf("len(Records) = %d, want %d", len(result.Records), tt.expectedLen)
+			}
+			if tt.expectedLen > 0 && tt.checkFirstKey != "" {
+				val := result.Records[0].Values[tt.checkFirstKey]
+				if val != tt.checkFirstVal {
+					t.Errorf("Records[0][%q] = %v, want %v", tt.checkFirstKey, val, tt.checkFirstVal)
+				}
+			}
+		})
+	}
+}
+
+// TestNewFromDB_ReturnsNonNil verifies that newFromDB returns a non-nil *Neo4jDriver
+// with the correct database field set.
+// Expected: non-nil driver, database matches input.
+func TestNewFromDB_ReturnsNonNil(t *testing.T) {
+	db := &mockNeo4jDB{}
+	drv := newFromDB(db, "testdb")
+
+	if drv == nil {
+		t.Fatal("newFromDB returned nil")
+	}
+	if drv.database != "testdb" {
+		t.Errorf("database = %q, want %q", drv.database, "testdb")
+	}
+	if drv.closed {
+		t.Error("newly created driver should not be closed")
+	}
+}
+
+// TestNewFromDBWithLogger_SetsLogger verifies that newFromDBWithLogger stores
+// the logger and it is used for debug logging.
+// Expected: non-nil driver with logger set.
+func TestNewFromDBWithLogger_SetsLogger(t *testing.T) {
+	db := &mockNeo4jDB{}
+	logger := slog.Default()
+	drv := newFromDBWithLogger(db, "testdb", logger)
+
+	if drv == nil {
+		t.Fatal("newFromDBWithLogger returned nil")
+	}
+	if drv.logger != logger {
+		t.Error("logger not set on driver")
+	}
+	if drv.database != "testdb" {
+		t.Errorf("database = %q, want %q", drv.database, "testdb")
+	}
+}
+
+// TestNewFromDBWithLogger_NilLogger verifies that newFromDBWithLogger works
+// correctly with a nil logger (debug logging disabled).
+// Expected: non-nil driver, nil logger, Execute succeeds without panic.
+func TestNewFromDBWithLogger_NilLogger(t *testing.T) {
+	session := &mockSessionRunner{
+		executeReadFn: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+			return []map[string]any{{"n": 1}}, nil
+		},
+	}
+	db := &mockNeo4jDB{session: session}
+	drv := newFromDBWithLogger(db, "testdb", nil)
+
+	if drv == nil {
+		t.Fatal("newFromDBWithLogger returned nil")
+	}
+	if drv.logger != nil {
+		t.Error("logger should be nil")
+	}
+
+	// Execute should work without logger (no panic)
+	stmt := cypher.Statement{Query: "MATCH (n) RETURN n"}
+	_, err := drv.Execute(context.Background(), stmt)
+	if err != nil {
+		t.Fatalf("Execute with nil logger returned error: %v", err)
+	}
 }

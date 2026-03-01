@@ -228,3 +228,137 @@ func TestGenerateResolvers_CypherField_UsesDriverExecute(t *testing.T) {
 		t.Errorf("@cypher resolver should use Driver.Execute for read-only execution:\n%s", s)
 	}
 }
+
+// === L8: @cypher resolver result mapping tests ===
+
+// TestGenerateResolvers_CypherField_ScalarExtractsCypherResult verifies that
+// a scalar @cypher field resolver (e.g., averageRating returning *float64)
+// extracts __cypher_result from the first record and converts it to the
+// return type using a typed helper function.
+// Expected: generated source contains `__cypher_result` extraction, NOT `_ = result`.
+// Currently FAILS because the template has a zero-value stub.
+func TestGenerateResolvers_CypherField_ScalarExtractsCypherResult(t *testing.T) {
+	src, err := GenerateResolvers(cypherResolverModel(), "generated")
+	if err != nil {
+		t.Fatalf("GenerateResolvers returned error: %v", err)
+	}
+	s := string(src)
+	// The scalar @cypher resolver should extract __cypher_result
+	if !strings.Contains(s, `"__cypher_result"`) {
+		t.Errorf("scalar @cypher resolver should extract __cypher_result from record:\n%s", s)
+	}
+}
+
+// TestGenerateResolvers_CypherField_NoStubDiscard verifies that the @cypher
+// resolver template does NOT contain the zero-value stub `_ = result`.
+// Expected: generated source does NOT contain `_ = result` (stub removed).
+// Currently FAILS because the template still has the stub.
+func TestGenerateResolvers_CypherField_NoStubDiscard(t *testing.T) {
+	src, err := GenerateResolvers(cypherResolverModel(), "generated")
+	if err != nil {
+		t.Fatalf("GenerateResolvers returned error: %v", err)
+	}
+	s := string(src)
+	if strings.Contains(s, "_ = result") {
+		t.Errorf("@cypher resolver should NOT contain stub '_ = result' — result should be used:\n%s", s)
+	}
+}
+
+// TestGenerateResolvers_CypherField_ScalarHelperGenerated verifies that the
+// generated resolver output includes a typed helper function for converting
+// the scalar @cypher result. For the averageRating field (returning *float64),
+// the helper should be named cypherResultToFloat64Ptr.
+// Expected: generated source contains "cypherResultToFloat64Ptr" helper.
+// Currently FAILS because no helper functions are generated.
+func TestGenerateResolvers_CypherField_ScalarHelperGenerated(t *testing.T) {
+	src, err := GenerateResolvers(cypherResolverModel(), "generated")
+	if err != nil {
+		t.Fatalf("GenerateResolvers returned error: %v", err)
+	}
+	s := string(src)
+	if !strings.Contains(s, "cypherResultToFloat64Ptr") {
+		t.Errorf("generated resolvers should include cypherResultToFloat64Ptr helper:\n%s", s)
+	}
+}
+
+// TestGenerateResolvers_CypherField_ScalarHelperBody verifies that the
+// cypherResultToFloat64Ptr helper function has the correct body:
+// returns nil if val is nil, type-asserts to float64 otherwise.
+// Expected: helper function body contains nil check and type assertion.
+// Currently FAILS because the helper is not generated.
+func TestGenerateResolvers_CypherField_ScalarHelperBody(t *testing.T) {
+	src, err := GenerateResolvers(cypherResolverModel(), "generated")
+	if err != nil {
+		t.Fatalf("GenerateResolvers returned error: %v", err)
+	}
+	s := string(src)
+	// The helper should check for nil and type-assert
+	if !strings.Contains(s, "func cypherResultToFloat64Ptr(val any) *float64") {
+		t.Errorf("missing cypherResultToFloat64Ptr function signature:\n%s", s)
+	}
+}
+
+// TestGenerateResolvers_CypherField_ScalarUsesHelper verifies that the
+// averageRating @cypher resolver calls the typed helper (cypherResultToFloat64Ptr)
+// to convert the result, rather than returning a zero value.
+// Expected: generated source contains call to cypherResultToFloat64Ptr in the
+// AverageRating resolver body.
+// Currently FAILS because the resolver returns zero value.
+func TestGenerateResolvers_CypherField_ScalarUsesHelper(t *testing.T) {
+	src, err := GenerateResolvers(cypherResolverModel(), "generated")
+	if err != nil {
+		t.Fatalf("GenerateResolvers returned error: %v", err)
+	}
+	s := string(src)
+	// The AverageRating resolver should call the helper to convert the result
+	if !strings.Contains(s, "cypherResultToFloat64Ptr") {
+		t.Errorf("AverageRating resolver should call cypherResultToFloat64Ptr:\n%s", s)
+	}
+}
+
+// TestGenerateResolvers_CypherField_ListUsesMapper verifies that a list-type
+// @cypher field resolver (e.g., recommended returning []*Movie) uses the
+// existing mapRecordsTo{Types} mapper on all records, rather than extracting
+// __cypher_result from a single record.
+// Expected: the Recommended resolver body returns recordsToMovies(result.Records).
+// Currently FAILS because the resolver returns nil (zero value stub).
+func TestGenerateResolvers_CypherField_ListUsesMapper(t *testing.T) {
+	src, err := GenerateResolvers(cypherResolverModel(), "generated")
+	if err != nil {
+		t.Fatalf("GenerateResolvers returned error: %v", err)
+	}
+	s := string(src)
+	// Find the Recommended resolver method and verify it returns the mapper result.
+	// The pattern: after "Recommended(" should appear "recordsToMovies(result.Records)"
+	// before the next "func " (ensuring it's in the right resolver, not the query resolver).
+	recIdx := strings.Index(s, "Recommended(ctx context.Context")
+	if recIdx < 0 {
+		t.Fatal("Recommended resolver method not found in generated source")
+	}
+	body := s[recIdx:]
+	// Find the end of this function (next top-level "func ")
+	nextFunc := strings.Index(body[1:], "\nfunc ")
+	if nextFunc > 0 {
+		body = body[:nextFunc+1]
+	}
+	if !strings.Contains(body, "recordsToMovies(result.Records)") {
+		t.Errorf("Recommended @cypher resolver should return recordsToMovies(result.Records) for list type:\n%s", body)
+	}
+}
+
+// TestGenerateResolvers_CypherField_EmptyResultHandled verifies that the
+// @cypher resolver handles empty result sets (no records) gracefully by
+// returning nil for nullable types, without panicking on index out of range.
+// Expected: generated source checks `len(result.Records) == 0` before accessing.
+// Currently FAILS because the result is discarded entirely.
+func TestGenerateResolvers_CypherField_EmptyResultHandled(t *testing.T) {
+	src, err := GenerateResolvers(cypherResolverModel(), "generated")
+	if err != nil {
+		t.Fatalf("GenerateResolvers returned error: %v", err)
+	}
+	s := string(src)
+	// The resolver should check for empty results
+	if !strings.Contains(s, "len(result.Records)") {
+		t.Errorf("@cypher resolver should check for empty result set:\n%s", s)
+	}
+}

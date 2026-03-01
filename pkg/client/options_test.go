@@ -50,7 +50,7 @@ func TestWithLogger_NilLogger_ReturnsOption(t *testing.T) {
 // Expected: New(schema, drv, WithLogger(logger)) compiles and returns a non-nil Client.
 func TestNew_AcceptsOptions(t *testing.T) {
 	logger := slog.Default()
-	c := New(nil, &mockDriverForLog{}, WithLogger(logger))
+	c := New(&mockExecutableSchema{}, &mockDriverForLog{}, WithLogger(logger))
 	if c == nil {
 		t.Error("New with options should return a non-nil Client")
 	}
@@ -59,7 +59,7 @@ func TestNew_AcceptsOptions(t *testing.T) {
 // TestNew_WithoutOptions verifies that New() works without any options (backwards compatible).
 // Expected: New(schema, drv) compiles and returns a non-nil Client.
 func TestNew_WithoutOptions(t *testing.T) {
-	c := New(nil, &mockDriverForLog{})
+	c := New(&mockExecutableSchema{}, &mockDriverForLog{})
 	if c == nil {
 		t.Error("New without options should return a non-nil Client")
 	}
@@ -72,7 +72,7 @@ func TestClient_Execute_LogsWithLogger(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	c := New(nil, &mockDriverForLog{}, WithLogger(logger))
+	c := New(&mockExecutableSchema{}, &mockDriverForLog{}, WithLogger(logger))
 
 	_, _ = c.Execute(context.Background(), "{ movies { title } }", nil)
 
@@ -89,7 +89,7 @@ func TestClient_Execute_LogsWithLogger(t *testing.T) {
 // log output when no logger is set (zero overhead).
 // Expected: no panic, no error from logging.
 func TestClient_Execute_NoLogWithoutLogger(t *testing.T) {
-	c := New(nil, &mockDriverForLog{})
+	c := New(&mockExecutableSchema{}, &mockDriverForLog{})
 
 	// Should not panic even without a logger
 	_, _ = c.Execute(context.Background(), "{ movies { title } }", nil)
@@ -102,7 +102,7 @@ func TestClient_Execute_LogsQueryAndVariables(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	c := New(nil, &mockDriverForLog{}, WithLogger(logger))
+	c := New(&mockExecutableSchema{}, &mockDriverForLog{}, WithLogger(logger))
 
 	query := "query GetMovie($id: ID!) { movie(id: $id) { title } }"
 	vars := map[string]any{"id": "movie-1"}
@@ -124,7 +124,7 @@ func TestWithLogger_LastWins(t *testing.T) {
 	var buf2 bytes.Buffer
 	logger2 := slog.New(slog.NewTextHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	c := New(nil, &mockDriverForLog{}, WithLogger(logger1), WithLogger(logger2))
+	c := New(&mockExecutableSchema{}, &mockDriverForLog{}, WithLogger(logger1), WithLogger(logger2))
 
 	_, _ = c.Execute(context.Background(), "{ movies { title } }", nil)
 

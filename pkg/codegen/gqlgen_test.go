@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -399,4 +400,60 @@ func TestInvokeGqlgen_InvalidConfig_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("InvokeGqlgen with invalid schema path should return error")
 	}
+}
+
+// === L-chdir: InvokeGqlgen mutex serialization tests ===
+
+// TestGqlgenMu_CanBeLocked verifies that the package-level gqlgenMu variable
+// exists and behaves as a sync.Mutex (can be locked and unlocked).
+// Expected: Lock/Unlock succeeds without panic. Guardrail test.
+func TestGqlgenMu_CanBeLocked(t *testing.T) {
+	gqlgenMu.Lock()
+	gqlgenMu.Unlock()
+}
+
+// TestInvokeGqlgen_BlocksWhenGqlgenMuHeld verifies that InvokeGqlgen acquires
+// gqlgenMu before the os.Chdir block. When the mutex is held externally,
+// InvokeGqlgen should block until it is released.
+// Currently FAILS because InvokeGqlgen does not lock gqlgenMu — it completes
+// regardless of whether the mutex is held.
+func TestInvokeGqlgen_BlocksWhenGqlgenMuHeld(t *testing.T) {
+	configPath, outputDir := writeValidGqlgenSetup(t)
+
+	// Pre-create go.mod and stub_gen.go so InvokeGqlgen skips the slow
+	// go-mod-tidy step and reaches the chdir block quickly.
+	os.WriteFile(filepath.Join(outputDir, "go.mod"), []byte("module generated\ngo 1.25\n"), 0644)
+	os.WriteFile(filepath.Join(outputDir, "stub_gen.go"), []byte("package generated\n"), 0644)
+
+	gqlgenMu.Lock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- InvokeGqlgen(configPath)
+	}()
+
+	// Without the mutex wired, InvokeGqlgen completes quickly (<2s):
+	// stat → parse → skip go.mod → chdir → LoadConfig error → return.
+	// With the mutex wired, InvokeGqlgen blocks on gqlgenMu.Lock().
+	select {
+	case err := <-done:
+		gqlgenMu.Unlock()
+		t.Fatalf("InvokeGqlgen completed (err=%v) while gqlgenMu held — mutex not wired into InvokeGqlgen", err)
+	case <-time.After(2 * time.Second):
+		// Expected: InvokeGqlgen is blocked on the mutex
+		gqlgenMu.Unlock()
+		<-done // let it finish and clean up
+	}
+}
+
+// TestInvokeGqlgen_ReleasesGqlgenMuAfterReturn verifies that gqlgenMu is
+// released after InvokeGqlgen returns (no leaked lock).
+// Expected: TryLock succeeds after InvokeGqlgen returns. Guardrail test.
+func TestInvokeGqlgen_ReleasesGqlgenMuAfterReturn(t *testing.T) {
+	_ = InvokeGqlgen("/nonexistent/path/gqlgen.yml")
+
+	if !gqlgenMu.TryLock() {
+		t.Fatal("gqlgenMu still held after InvokeGqlgen returned — lock not released")
+	}
+	gqlgenMu.Unlock()
 }

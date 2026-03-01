@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -13,6 +14,12 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
 )
+
+// errNilSchema is the panic message when New() is called with a nil schema.
+const errNilSchema = "gql-orm: schema must not be nil"
+
+// errClientClosed is returned when Execute is called on a closed client.
+var errClientClosed = errors.New("client is closed")
 
 // Client provides a programmatic Go API for executing GraphQL queries and
 // mutations against a Cypher-backed graph database. Wraps gqlgen's
@@ -30,6 +37,9 @@ type Client struct {
 // The driver is used for lifecycle management (Close).
 // Options (e.g., WithLogger) configure optional behavior.
 func New(schema graphql.ExecutableSchema, drv driver.Driver, opts ...Option) *Client {
+	if schema == nil {
+		panic(errNilSchema)
+	}
 	var options clientOptions
 	for _, o := range opts {
 		o(&options)
@@ -37,16 +47,20 @@ func New(schema graphql.ExecutableSchema, drv driver.Driver, opts ...Option) *Cl
 	return &Client{schema: schema, drv: drv, logger: options.logger}
 }
 
+// isClosed reports whether the client has been closed.
+// Thread-safe: reads the closed flag under the mutex.
+func (c *Client) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 // Execute runs a GraphQL query or mutation and returns the response data.
 // The result mirrors the GraphQL JSON response shape as map[string]any.
 // Errors from GraphQL execution (validation, resolver errors) are returned as error.
 func (c *Client) Execute(ctx context.Context, query string, variables map[string]any) (map[string]any, error) {
-	c.mu.Lock()
-	closed := c.closed
-	c.mu.Unlock()
-
-	if closed {
-		return nil, fmt.Errorf("client is closed")
+	if c.isClosed() {
+		return nil, errClientClosed
 	}
 
 	if strings.TrimSpace(query) == "" {
@@ -59,11 +73,6 @@ func (c *Client) Execute(ctx context.Context, query string, variables map[string
 
 	if c.logger != nil {
 		c.logger.Debug("graphql.execute", "query", query, "variables", variables)
-	}
-
-	// When no gqlgen schema is configured, use direct GraphQL-to-Cypher execution.
-	if c.schema == nil {
-		return c.directExecute(ctx, query, variables)
 	}
 
 	// Parse the query syntax (without schema validation so mock schemas work).
