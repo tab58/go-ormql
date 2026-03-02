@@ -102,22 +102,6 @@ func TestNeo4jDriverSatisfiesInterface(t *testing.T) {
 	var _ driver.Driver = &Neo4jDriver{}
 }
 
-// --- NewNeo4jDriver tests ---
-
-// TestNewNeo4jDriver_ReturnsError verifies that the stub constructor returns an error
-// (no real Neo4j to connect to). Once implemented, this confirms connection setup.
-func TestNewNeo4jDriver_ReturnsError(t *testing.T) {
-	_, err := NewNeo4jDriver(driver.Config{
-		URI:      "bolt://localhost:7687",
-		Username: "neo4j",
-		Password: "password",
-		Database: "neo4j",
-	})
-	if err == nil {
-		t.Fatal("NewNeo4jDriver stub should return error")
-	}
-}
-
 // --- Execute tests ---
 
 // TestExecute_ReturnsResult verifies that Execute runs a read query and returns flattened records.

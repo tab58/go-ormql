@@ -4,6 +4,7 @@ package neo4j
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,41 @@ func createTestDriver(t *testing.T, cfg driver.Config) driver.Driver {
 		drv.Close(ctx)
 	})
 	return drv
+}
+
+// === NEO4J-1: Invalid URI error handling test ===
+
+// TestIntegration_NewNeo4jDriver_InvalidURI verifies that NewNeo4jDriver returns
+// a clear error when given an unreachable URI. The error must:
+// 1. Be non-nil (connection fails for unreachable host)
+// 2. Contain the URI in the message (for debuggability)
+// 3. NOT contain credentials in the message (security)
+// Expected: non-nil error with URI but no password in message.
+func TestIntegration_NewNeo4jDriver_InvalidURI(t *testing.T) {
+	password := "s3cr3t-passw0rd"
+	cfg := driver.Config{
+		URI:      "bolt://invalid-host:0",
+		Username: "neo4j",
+		Password: password,
+		Database: "neo4j",
+	}
+
+	_, err := NewNeo4jDriver(cfg)
+	if err == nil {
+		t.Fatal("NewNeo4jDriver should return error for unreachable URI")
+	}
+
+	errMsg := err.Error()
+
+	// Error message must contain the URI for debuggability
+	if !strings.Contains(errMsg, "invalid-host") {
+		t.Errorf("error message should contain URI host, got: %s", errMsg)
+	}
+
+	// Error message must NOT contain the password (security)
+	if strings.Contains(errMsg, password) {
+		t.Errorf("error message must NOT contain password, got: %s", errMsg)
+	}
 }
 
 // === INT-1: Neo4j integration tests ===
