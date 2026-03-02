@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tab58/gql-orm/pkg/internal/strutil"
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/internal/strutil"
+	"github.com/tab58/go-ormql/pkg/schema"
 )
 
 // emptyFieldPlaceholder is the dummy field name used when a GraphQL input type

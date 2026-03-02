@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/schema"
 )
 
 // --- CG-25: SimilarResult model + vector field on node struct tests ---

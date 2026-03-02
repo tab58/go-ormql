@@ -8,18 +8,18 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/tab58/gql-orm/pkg/driver"
-	"github.com/tab58/gql-orm/pkg/schema"
-	"github.com/tab58/gql-orm/pkg/translate"
+	"github.com/tab58/go-ormql/pkg/driver"
+	"github.com/tab58/go-ormql/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/translate"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // errNilDriver is the panic message when New() is called with a nil driver.
-const errNilDriver = "gql-orm: driver must not be nil"
+const errNilDriver = "gormql: driver must not be nil"
 
 // errEmptyModel is the panic message when New() is called with a zero-node model.
-const errEmptyModel = "gql-orm: model must have at least one node"
+const errEmptyModel = "gormql: model must have at least one node"
 
 // errClientClosed is returned when Execute is called on a closed client.
 var errClientClosed = errors.New("client is closed")
@@ -93,7 +93,7 @@ func New(model schema.GraphModel, augSchemaSDL string, drv driver.Driver, opts .
 	schemaDoc, parseErr := gqlparser.LoadSchema(&ast.Source{Input: augSchemaSDL})
 	if parseErr != nil {
 		// Schema parsing failure is a programming error — panic
-		panic(fmt.Sprintf("gql-orm: failed to parse augmented schema: %v", parseErr))
+		panic(fmt.Sprintf("gormql: failed to parse augmented schema: %v", parseErr))
 	}
 
 	return &Client{

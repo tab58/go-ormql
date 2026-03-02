@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tab58/gql-orm/pkg/cypher"
-	"github.com/tab58/gql-orm/pkg/driver"
+	"github.com/tab58/go-ormql/pkg/cypher"
+	"github.com/tab58/go-ormql/pkg/driver"
 	tcneo4j "github.com/testcontainers/testcontainers-go/modules/neo4j"
 )
 

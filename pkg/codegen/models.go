@@ -5,8 +5,8 @@ import (
 	"go/format"
 	"strings"
 
-	"github.com/tab58/gql-orm/pkg/internal/strutil"
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/internal/strutil"
+	"github.com/tab58/go-ormql/pkg/schema"
 )
 
 // GenerateModels produces Go source code containing model types for the given

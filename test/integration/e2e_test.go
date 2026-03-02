@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tab58/gql-orm/pkg/client"
-	"github.com/tab58/gql-orm/pkg/codegen"
-	"github.com/tab58/gql-orm/pkg/driver"
-	neo4jdriver "github.com/tab58/gql-orm/pkg/driver/neo4j"
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/client"
+	"github.com/tab58/go-ormql/pkg/codegen"
+	"github.com/tab58/go-ormql/pkg/driver"
+	neo4jdriver "github.com/tab58/go-ormql/pkg/driver/neo4j"
+	"github.com/tab58/go-ormql/pkg/schema"
 	tcneo4j "github.com/testcontainers/testcontainers-go/modules/neo4j"
 )
 

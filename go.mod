@@ -1,4 +1,4 @@
-module github.com/tab58/gql-orm
+module github.com/tab58/go-ormql
 
 go 1.25
 

@@ -5,7 +5,7 @@ import (
 	"go/format"
 	"strings"
 
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/schema"
 )
 
 // GenerateGraphModelRegistry produces Go source code that declares package-level
@@ -22,7 +22,7 @@ func GenerateGraphModelRegistry(model schema.GraphModel, augSchemaSDL string, pa
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("package %s\n\n", packageName))
-	sb.WriteString("import \"github.com/tab58/gql-orm/pkg/schema\"\n\n")
+	sb.WriteString("import \"github.com/tab58/go-ormql/pkg/schema\"\n\n")
 
 	// GraphModel variable
 	sb.WriteString("var GraphModel = schema.GraphModel{\n")

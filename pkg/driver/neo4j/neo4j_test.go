@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tab58/gql-orm/pkg/cypher"
-	"github.com/tab58/gql-orm/pkg/driver"
+	"github.com/tab58/go-ormql/pkg/cypher"
+	"github.com/tab58/go-ormql/pkg/driver"
 )
 
 // --- Mock types ---

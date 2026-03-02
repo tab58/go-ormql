@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/tab58/gql-orm/pkg/cypher"
-	"github.com/tab58/gql-orm/pkg/driver"
+	"github.com/tab58/go-ormql/pkg/cypher"
+	"github.com/tab58/go-ormql/pkg/driver"
 )
 
 // errTransactionCommitted is returned when Execute is called on a committed transaction.

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tab58/gql-orm/pkg/cypher"
-	"github.com/tab58/gql-orm/pkg/driver"
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/cypher"
+	"github.com/tab58/go-ormql/pkg/driver"
+	"github.com/tab58/go-ormql/pkg/schema"
 )
 
 // --- Mock Driver ---

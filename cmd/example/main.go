@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/tab58/gql-orm/pkg/driver"
-	"github.com/tab58/gql-orm/pkg/driver/neo4j"
-	"github.com/tab58/gql-orm/cmd/example/generated"
+	"github.com/tab58/go-ormql/pkg/driver"
+	"github.com/tab58/go-ormql/pkg/driver/neo4j"
+	"github.com/tab58/go-ormql/cmd/example/generated"
 )
 
 func main() {

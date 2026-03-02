@@ -191,12 +191,12 @@ func TestE2EV2_GoBuildSucceeds(t *testing.T) {
 		t.Fatalf("V2 Generate failed: %v", err)
 	}
 
-	// V2 go.mod: only gql-orm dependency, NO gqlgen.
+	// V2 go.mod: only gormql dependency, NO gqlgen.
 	root := v2ProjectRoot(t)
 	goModContent := "module generated\n\ngo 1.25\n\nrequire (\n" +
-		"\tgithub.com/tab58/gql-orm v0.0.0\n" +
+		"\tgithub.com/tab58/go-ormql v0.0.0\n" +
 		")\n\n" +
-		"replace github.com/tab58/gql-orm => " + root + "\n"
+		"replace github.com/tab58/go-ormql => " + root + "\n"
 	if err := os.WriteFile(filepath.Join(outputDir, "go.mod"), []byte(goModContent), 0644); err != nil {
 		t.Fatalf("failed to write go.mod: %v", err)
 	}

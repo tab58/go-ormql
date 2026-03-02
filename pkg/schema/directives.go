@@ -28,7 +28,7 @@ const (
 )
 
 // BuiltinDirectiveDefs returns the GraphQL SDL string for the built-in
-// gql-orm directives (@node, @relationship, @relationshipProperties).
+// gormql directives (@node, @relationship, @relationshipProperties).
 // This should be prepended to user schemas before parsing.
 func BuiltinDirectiveDefs() string {
 	return `

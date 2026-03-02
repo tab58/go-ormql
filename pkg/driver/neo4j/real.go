@@ -4,7 +4,7 @@ import (
 	"context"
 
 	neo4jDriver "github.com/neo4j/neo4j-go-driver/v5/neo4j"
-	"github.com/tab58/gql-orm/pkg/driver"
+	"github.com/tab58/go-ormql/pkg/driver"
 )
 
 // realNeo4jDB wraps the real neo4j-go-driver to implement the neo4jDB interface.

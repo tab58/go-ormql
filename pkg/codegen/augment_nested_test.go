@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/schema"
 )
 
 // --- CG-13: Nested disconnect/update/delete input types ---

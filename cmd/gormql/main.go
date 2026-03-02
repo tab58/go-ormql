@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tab58/gql-orm/pkg/codegen"
+	"github.com/tab58/go-ormql/pkg/codegen"
 )
 
 func main() {

@@ -1,6 +1,6 @@
-# gql-orm
+# gormql
 
-A Go code generator that bridges GraphQL and graph databases. Write an annotated `.graphql` schema, run `gql-orm generate`, and get a type-safe Go client that translates GraphQL operations into optimized Cypher queries — one database round-trip per operation, regardless of nesting depth.
+A Go code generator that bridges GraphQL and graph databases. Write an annotated `.graphql` schema, run `gormql generate`, and get a type-safe Go client that translates GraphQL operations into optimized Cypher queries — one database round-trip per operation, regardless of nesting depth.
 
 Built for Go developers working with Neo4j (or any Cypher-compatible database). Inspired by [`@neo4j/graphql`](https://neo4j.com/docs/graphql/current/) but using compile-time code generation instead of runtime schema construction.
 
@@ -28,13 +28,13 @@ Built for Go developers working with Neo4j (or any Cypher-compatible database). 
 ## Installation
 
 ```bash
-go install github.com/tab58/gql-orm/cmd/gql-orm@latest
+go install github.com/tab58/go-ormql/cmd/gormql@latest
 ```
 
 Or build from source:
 
 ```bash
-go build ./cmd/gql-orm/...
+go build ./cmd/gormql/...
 ```
 
 ## Quick Start
@@ -69,7 +69,7 @@ type ActedInProperties @relationshipProperties {
 ### 2. Generate code
 
 ```bash
-gql-orm generate \
+gormql generate \
   --schema schema.graphql \
   --output ./generated \
   --package generated
@@ -95,8 +95,8 @@ import (
     "log"
 
     "your/project/generated"
-    "github.com/tab58/gql-orm/pkg/driver"
-    "github.com/tab58/gql-orm/pkg/driver/neo4j"
+    "github.com/tab58/go-ormql/pkg/driver"
+    "github.com/tab58/go-ormql/pkg/driver/neo4j"
 )
 
 func main() {
@@ -516,7 +516,7 @@ Enable debug logging with `log/slog` to see both the GraphQL query and the gener
 import (
     "log/slog"
     "os"
-    "github.com/tab58/gql-orm/pkg/client"
+    "github.com/tab58/go-ormql/pkg/client"
 )
 
 logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -542,7 +542,7 @@ This logs `graphql.execute` (with query and variables) at the client level and `
 schema.graphql (user input)
         │
         ▼
-  gql-orm generate           Build time
+  gormql generate             Build time
   ┌─────────────────┐
   │ 1. Parse schema │
   │ 2. Augment CRUD │
@@ -577,7 +577,7 @@ Every GraphQL operation — no matter how deeply nested — translates into exac
 
 ```
 cmd/
-  gql-orm/          CLI entry point (generate subcommand)
+  gormql/           CLI entry point (generate subcommand)
 pkg/
   schema/           GraphQL schema parsing, directive extraction, GraphModel
   cypher/           Cypher statement builder library (public utility API)

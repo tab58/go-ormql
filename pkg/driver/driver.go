@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/tab58/gql-orm/pkg/cypher"
+	"github.com/tab58/go-ormql/pkg/cypher"
 )
 
 // Config holds connection configuration for a graph database driver.

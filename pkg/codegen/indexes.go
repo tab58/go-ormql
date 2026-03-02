@@ -5,7 +5,7 @@ import (
 	"go/format"
 	"strings"
 
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/schema"
 )
 
 // vectorIndexDDLFormat is the Cypher DDL template for creating a vector index.
@@ -46,8 +46,8 @@ func GenerateIndexes(model schema.GraphModel, packageName string) ([]byte, error
 	sb.WriteString("import (\n")
 	sb.WriteString("\t\"context\"\n")
 	sb.WriteString("\t\"fmt\"\n\n")
-	sb.WriteString("\t\"github.com/tab58/gql-orm/pkg/cypher\"\n")
-	sb.WriteString("\t\"github.com/tab58/gql-orm/pkg/driver\"\n")
+	sb.WriteString("\t\"github.com/tab58/go-ormql/pkg/cypher\"\n")
+	sb.WriteString("\t\"github.com/tab58/go-ormql/pkg/driver\"\n")
 	sb.WriteString(")\n\n")
 
 	sb.WriteString("// CreateIndexes creates vector indexes for nodes with @vector directives.\n")

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tab58/gql-orm/pkg/cypher"
+	"github.com/tab58/go-ormql/pkg/cypher"
 )
 
 // --- Mock Transaction ---

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tab58/gql-orm/pkg/schema"
+	"github.com/tab58/go-ormql/pkg/schema"
 )
 
 // --- CG-21: GraphModel registry generator tests ---
@@ -165,7 +165,7 @@ func TestGenerateGraphModelRegistry_ImportsSchemaPackage(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	src := string(out)
-	if !strings.Contains(src, `"github.com/tab58/gql-orm/pkg/schema"`) {
+	if !strings.Contains(src, `"github.com/tab58/go-ormql/pkg/schema"`) {
 		t.Error("expected schema package import in output")
 	}
 }
