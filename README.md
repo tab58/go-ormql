@@ -15,6 +15,7 @@ Built for Go developers working with Neo4j (or any Cypher-compatible database). 
 - **Nested mutations** — create, connect, disconnect, update, and delete related nodes in a single operation
 - **Relationship properties** — first-class support for typed edge data
 - **`@cypher` directive** — custom Cypher for computed fields
+- **`@vector` directive** — similarity search with automatic index DDL generation
 - **GraphQL variables** — full support for parameterized queries and mutations
 - **Type-safe results** — `Result.Decode()` unmarshals into generated Go structs
 - **Debug logging** — optional `log/slog` integration for GraphQL and Cypher query visibility
@@ -24,6 +25,7 @@ Built for Go developers working with Neo4j (or any Cypher-compatible database). 
 
 - Go 1.24+
 - Neo4j 4.1+ (required for CALL subqueries)
+- Neo4j 5.11+ (required for `@vector` similarity queries)
 
 ## Installation
 
@@ -75,7 +77,7 @@ gormql generate \
   --package generated
 ```
 
-This produces 4 files:
+This produces 4 files (5 when `@vector` is present):
 
 | File | Purpose |
 |------|---------|
@@ -83,6 +85,7 @@ This produces 4 files:
 | `models_gen.go` | Go structs for all GraphQL types — nodes (with relationship fields), inputs, enums, connections, and response types |
 | `graphmodel_gen.go` | Serialized graph model and augmented schema SDL embedded as Go code (no schema files needed at runtime) |
 | `client_gen.go` | `NewClient(drv, opts...)` constructor wiring the embedded model and schema to the client |
+| `indexes_gen.go` | `CreateIndexes(ctx, drv)` function with vector index DDL (only generated when `@vector` is present) |
 
 ### 3. Use the client
 
@@ -203,6 +206,28 @@ type Movie @node {
 - `@cypher` fields are read-only — excluded from create/update inputs
 - Field arguments become `$paramName` parameters in the Cypher statement
 - Scalar return types are automatically limited to one result; list types return all results
+
+### `@vector`
+
+Enables similarity search on a node field backed by a Neo4j vector index. The field must be of type `[Float!]!`. At most one `@vector` field per `@node` type.
+
+```graphql
+type Movie @node {
+  id: ID!
+  title: String!
+  embedding: [Float!]! @vector(indexName: "movie_embedding", dimensions: 256, similarity: "cosine")
+}
+```
+
+Arguments:
+- `indexName` (required) — the Neo4j vector index name
+- `dimensions` (required) — vector dimensionality
+- `similarity` (required) — similarity function (`"cosine"`, `"euclidean"`)
+
+When `@vector` is present, the generator produces:
+- A `moviesSimilar(embedding: [Float!]!, first: Int): [MovieSimilarResult!]!` query
+- A `MovieSimilarResult` type with a `score` field and the node fields
+- An `indexes_gen.go` file with `CreateIndexes(ctx, drv)` that runs `CREATE VECTOR INDEX IF NOT EXISTS` DDL
 
 ## Auto-Generated API
 
@@ -543,16 +568,18 @@ schema.graphql (user input)
         │
         ▼
   gormql generate             Build time
-  ┌─────────────────┐
-  │ 1. Parse schema │
-  │ 2. Augment CRUD │
-  │ 3. Gen models   │
-  │ 4. Gen registry │
-  │ 5. Gen client   │
-  └────────┬────────┘
-           │
-           ▼
-  generated/ (4 Go files)
+  ┌──────────────────────┐
+  │ 1. Parse schema      │
+  │ 2. Augment CRUD      │
+  │ 3. Gen models        │
+  │ 4. Gen registry      │
+  │ 5. Gen client        │
+  │ 6. Gen indexes       │
+  │    (@vector only)    │
+  └──────────┬───────────┘
+             │
+             ▼
+  generated/ (4-5 Go files)
            │
            │                  Runtime
            ▼
@@ -580,14 +607,14 @@ cmd/
   gormql/           CLI entry point (generate subcommand)
 pkg/
   schema/           GraphQL schema parsing, directive extraction, GraphModel
-  cypher/           Cypher statement builder library (public utility API)
-  translate/        GraphQL-to-Cypher translator (CALL subqueries, map projections)
-  driver/           Abstract Cypher driver interface
+  cypher/           Cypher statement builder library (parameterized queries, WhereClause, SortField)
+  translate/        GraphQL-to-Cypher translator (AST walker, CALL subqueries, map projections)
+  driver/           Abstract Cypher driver interface + Transaction support
     neo4j/          Neo4j driver implementation
-  codegen/          Code generation pipeline
-  client/           Programmatic GraphQL client (translator + validation)
+  codegen/          Code generation pipeline (augment, models, registry, client, indexes)
+  client/           Programmatic GraphQL client (translator + gqlparser validation, Result with Decode)
   internal/
-    strutil/        Shared string utilities
+    strutil/        Shared string utilities (Capitalize, PluralLower)
 ```
 
 ## Type Mapping
