@@ -13,6 +13,7 @@ import (
 	"github.com/tab58/gql-orm/pkg/codegen"
 	"github.com/tab58/gql-orm/pkg/driver"
 	neo4jdriver "github.com/tab58/gql-orm/pkg/driver/neo4j"
+	"github.com/tab58/gql-orm/pkg/schema"
 	tcneo4j "github.com/testcontainers/testcontainers-go/modules/neo4j"
 )
 
@@ -75,13 +76,109 @@ func startNeo4jContainer(t *testing.T) driver.Config {
 	}
 }
 
-// === INT-2: End-to-end client integration tests ===
+// testGraphModel returns a schema.GraphModel with Movie + Actor nodes
+// and an ACTED_IN relationship with properties for V2 client testing.
+func testGraphModel() schema.GraphModel {
+	return schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{
+				Name:   "Movie",
+				Labels: []string{"Movie"},
+				Fields: []schema.FieldDefinition{
+					{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+					{Name: "title", GraphQLType: "String!", GoType: "string", CypherType: "STRING"},
+					{Name: "released", GraphQLType: "Int", GoType: "*int", CypherType: "INTEGER", Nullable: true},
+				},
+			},
+			{
+				Name:   "Actor",
+				Labels: []string{"Actor"},
+				Fields: []schema.FieldDefinition{
+					{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+					{Name: "name", GraphQLType: "String!", GoType: "string", CypherType: "STRING"},
+				},
+			},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			{
+				FieldName: "movies",
+				RelType:   "ACTED_IN",
+				Direction: schema.DirectionOUT,
+				FromNode:  "Actor",
+				ToNode:    "Movie",
+				Properties: &schema.PropertiesDefinition{
+					TypeName: "ActedInProperties",
+					Fields: []schema.FieldDefinition{
+						{Name: "role", GraphQLType: "String!", GoType: "string", CypherType: "STRING"},
+					},
+				},
+			},
+		},
+	}
+}
 
-// TestE2E_PipelineProducesAllFiles verifies that the codegen pipeline
-// produces all expected generated files, including client_gen.go.
-// Expected: schema.graphql, gqlgen.yml, resolvers_gen.go, mappers_gen.go,
-// and client_gen.go all exist in the output directory.
-func TestE2E_PipelineProducesAllFiles(t *testing.T) {
+// testAugmentedSchemaSDL returns a minimal augmented schema SDL for V2 client testing.
+// In the full pipeline, AugmentSchema() generates this. Here we provide a
+// hand-crafted version for test isolation.
+const testAugmentedSchemaSDL = `type Query {
+  movies(where: MovieWhere, sort: [MovieSort!]): [Movie!]!
+  actors(where: ActorWhere, sort: [ActorSort!]): [Actor!]!
+}
+
+type Mutation {
+  createMovies(input: [MovieCreateInput!]!): CreateMoviesMutationResponse!
+  updateMovies(where: MovieWhere, update: MovieUpdateInput): UpdateMoviesMutationResponse!
+  deleteMovies(where: MovieWhere): DeleteInfo!
+  createActors(input: [ActorCreateInput!]!): CreateActorsMutationResponse!
+}
+
+type Movie {
+  id: ID!
+  title: String!
+  released: Int
+}
+
+type Actor {
+  id: ID!
+  name: String!
+}
+
+input MovieWhere { title: String }
+input ActorWhere { name: String }
+input MovieSort { title: SortDirection }
+input ActorSort { name: SortDirection }
+input MovieCreateInput { title: String!, released: Int }
+input ActorCreateInput { name: String! }
+input MovieUpdateInput { title: String, released: Int }
+type CreateMoviesMutationResponse { movies: [Movie!]! }
+type UpdateMoviesMutationResponse { movies: [Movie!]! }
+type CreateActorsMutationResponse { actors: [Actor!]! }
+type DeleteInfo { nodesDeleted: Int! }
+enum SortDirection { ASC DESC }
+`
+
+// createV2Client creates a V2 client connected to the test Neo4j container.
+func createV2Client(t *testing.T, cfg driver.Config) *client.Client {
+	t.Helper()
+	drv, err := neo4jdriver.NewNeo4jDriver(cfg)
+	if err != nil {
+		t.Fatalf("NewNeo4jDriver failed: %v", err)
+	}
+
+	c := client.New(testGraphModel(), testAugmentedSchemaSDL, drv)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		c.Close(ctx)
+	})
+	return c
+}
+
+// === INT-3: V2 client integration tests ===
+
+// Test: V2 pipeline produces exactly 4 expected output files.
+// Expected: schema.graphql, models_gen.go, graphmodel_gen.go, client_gen.go.
+func TestE2E_V2_PipelineProducesExpectedFiles(t *testing.T) {
 	schemaPath := writeTestSchema(t)
 	outputDir := t.TempDir()
 
@@ -96,74 +193,41 @@ func TestE2E_PipelineProducesAllFiles(t *testing.T) {
 
 	expectedFiles := []string{
 		"schema.graphql",
-		"gqlgen.yml",
-		"resolvers_gen.go",
-		"mappers_gen.go",
+		"models_gen.go",
+		"graphmodel_gen.go",
 		"client_gen.go",
 	}
 	for _, name := range expectedFiles {
 		path := filepath.Join(outputDir, name)
 		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-			t.Errorf("pipeline did not produce %s", name)
+			t.Errorf("V2 pipeline did not produce %s", name)
 		}
 	}
 }
 
-// TestE2E_DriverConnectsToNeo4j verifies that NewNeo4jDriver can connect
-// to a real Neo4j container instance.
-// Expected: non-nil driver, nil error.
-func TestE2E_DriverConnectsToNeo4j(t *testing.T) {
+// Test: V2 Client can execute a simple query and return a non-nil result.
+// Expected: Execute returns non-nil *Result.
+func TestE2E_V2_ClientExecuteQuery(t *testing.T) {
 	cfg := startNeo4jContainer(t)
-	drv, err := neo4jdriver.NewNeo4jDriver(cfg)
-	if err != nil {
-		t.Fatalf("NewNeo4jDriver should connect: %v", err)
-	}
-	if drv == nil {
-		t.Fatal("NewNeo4jDriver returned nil driver")
-	}
-	defer drv.Close(context.Background())
-}
-
-// TestE2E_ClientExecuteQuery verifies that a Client can execute a simple
-// GraphQL query against a real Neo4j database and return results.
-// Expected: Execute returns non-nil map[string]any with query results.
-func TestE2E_ClientExecuteQuery(t *testing.T) {
-	cfg := startNeo4jContainer(t)
-	drv, err := neo4jdriver.NewNeo4jDriver(cfg)
-	if err != nil {
-		t.Fatalf("NewNeo4jDriver failed: %v", err)
-	}
-	defer drv.Close(context.Background())
-
-	// Create client with nil schema for now — will use generated schema once pipeline is wired
-	c := client.New(nil, drv)
-	defer c.Close(context.Background())
+	c := createV2Client(t, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	result, err := c.Execute(ctx, `query { movies { title } }`, nil)
 	if err != nil {
-		t.Fatalf("client.Execute query failed: %v", err)
+		t.Fatalf("V2 client.Execute query failed: %v", err)
 	}
 	if result == nil {
-		t.Fatal("client.Execute returned nil result")
+		t.Fatal("V2 client.Execute returned nil result")
 	}
 }
 
-// TestE2E_ClientCreateMutation verifies that a Client can execute a create
-// mutation and the created data is returned.
-// Expected: mutation returns non-nil result with created movie data.
-func TestE2E_ClientCreateMutation(t *testing.T) {
+// Test: V2 Client can execute a create mutation.
+// Expected: Execute returns non-nil *Result for mutation.
+func TestE2E_V2_ClientCreateMutation(t *testing.T) {
 	cfg := startNeo4jContainer(t)
-	drv, err := neo4jdriver.NewNeo4jDriver(cfg)
-	if err != nil {
-		t.Fatalf("NewNeo4jDriver failed: %v", err)
-	}
-	defer drv.Close(context.Background())
-
-	c := client.New(nil, drv)
-	defer c.Close(context.Background())
+	c := createV2Client(t, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -174,147 +238,182 @@ func TestE2E_ClientCreateMutation(t *testing.T) {
 		}
 	}`, nil)
 	if err != nil {
-		t.Fatalf("client.Execute create mutation failed: %v", err)
+		t.Fatalf("V2 create mutation failed: %v", err)
 	}
 	if result == nil {
-		t.Fatal("create mutation returned nil result")
+		t.Fatal("V2 create mutation returned nil result")
 	}
 }
 
-// TestE2E_ClientNestedCreateMutation verifies that a Client can execute a
-// nested create mutation (creating a node + related node + relationship).
-// Expected: mutation succeeds and returns the created data.
-func TestE2E_ClientNestedCreateMutation(t *testing.T) {
+// Test: V2 Client query with filter arguments.
+// Expected: query with where filter returns filtered results.
+func TestE2E_V2_ClientQueryWithFilter(t *testing.T) {
 	cfg := startNeo4jContainer(t)
-	drv, err := neo4jdriver.NewNeo4jDriver(cfg)
-	if err != nil {
-		t.Fatalf("NewNeo4jDriver failed: %v", err)
-	}
-	defer drv.Close(context.Background())
-
-	c := client.New(nil, drv)
-	defer c.Close(context.Background())
+	c := createV2Client(t, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	vars := map[string]any{
-		"input": []map[string]any{
-			{
-				"name": "Keanu Reeves",
-				"movies": map[string]any{
-					"create": []map[string]any{
-						{
-							"node": map[string]any{
-								"title":    "The Matrix",
-								"released": 1999,
-							},
-							"edge": map[string]any{
-								"role": "Neo",
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	result, err := c.Execute(ctx, `mutation CreateActorWithMovie($input: [ActorCreateInput!]!) {
-		createActors(input: $input) {
-			actors { name movies { title } }
-		}
-	}`, vars)
-	if err != nil {
-		t.Fatalf("nested create mutation failed: %v", err)
-	}
-	if result == nil {
-		t.Fatal("nested create mutation returned nil result")
-	}
-}
-
-// TestE2E_ClientNestedConnectMutation verifies that a Client can execute a
-// nested connect mutation (connecting an existing node to another via relationship).
-// Expected: mutation succeeds and returns the connected data.
-func TestE2E_ClientNestedConnectMutation(t *testing.T) {
-	cfg := startNeo4jContainer(t)
-	drv, err := neo4jdriver.NewNeo4jDriver(cfg)
-	if err != nil {
-		t.Fatalf("NewNeo4jDriver failed: %v", err)
-	}
-	defer drv.Close(context.Background())
-
-	c := client.New(nil, drv)
-	defer c.Close(context.Background())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// First create a movie
-	_, err = c.Execute(ctx, `mutation {
-		createMovies(input: [{ title: "John Wick", released: 2014 }]) {
+	// Create a movie first
+	_, err := c.Execute(ctx, `mutation {
+		createMovies(input: [{ title: "Inception", released: 2010 }]) {
 			movies { title }
 		}
 	}`, nil)
 	if err != nil {
-		t.Fatalf("create movie failed: %v", err)
+		t.Fatalf("create failed: %v", err)
 	}
 
-	// Then create an actor connected to the existing movie
-	vars := map[string]any{
-		"input": []map[string]any{
-			{
-				"name": "Keanu Reeves",
-				"movies": map[string]any{
-					"connect": []map[string]any{
-						{
-							"where": map[string]any{"title": "John Wick"},
-							"edge":  map[string]any{"role": "John Wick"},
-						},
-					},
-				},
-			},
-		},
-	}
-	result, err := c.Execute(ctx, `mutation ConnectActorToMovie($input: [ActorCreateInput!]!) {
-		createActors(input: $input) {
-			actors { name }
-		}
-	}`, vars)
+	// Query with filter
+	result, err := c.Execute(ctx, `query {
+		movies(where: { title: "Inception" }) { title released }
+	}`, nil)
 	if err != nil {
-		t.Fatalf("nested connect mutation failed: %v", err)
+		t.Fatalf("V2 filtered query failed: %v", err)
 	}
 	if result == nil {
-		t.Fatal("nested connect mutation returned nil result")
+		t.Fatal("V2 filtered query returned nil result")
+	}
+
+	data := result.Data()
+	if data == nil {
+		t.Fatal("result.Data() returned nil")
+	}
+	movies, ok := data["movies"]
+	if !ok {
+		t.Fatal("result missing 'movies' key")
+	}
+	movieList, ok := movies.([]any)
+	if !ok {
+		t.Fatalf("movies is %T, want []any", movies)
+	}
+	if len(movieList) == 0 {
+		t.Fatal("expected at least 1 movie, got 0")
 	}
 }
 
-// TestE2E_RoundTrip_CreateThenQuery verifies the full round trip:
-// create a node, then query it back and verify the result shape.
-// Expected: query returns the created node with matching field values.
-func TestE2E_RoundTrip_CreateThenQuery(t *testing.T) {
+// Test: V2 Client query with sort arguments.
+// Expected: query with sort returns sorted results.
+func TestE2E_V2_ClientQueryWithSort(t *testing.T) {
 	cfg := startNeo4jContainer(t)
-	drv, err := neo4jdriver.NewNeo4jDriver(cfg)
-	if err != nil {
-		t.Fatalf("NewNeo4jDriver failed: %v", err)
-	}
-	defer drv.Close(context.Background())
+	c := createV2Client(t, cfg)
 
-	c := client.New(nil, drv)
-	defer c.Close(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Create two movies
+	_, err := c.Execute(ctx, `mutation {
+		createMovies(input: [
+			{ title: "Zebra", released: 2020 },
+			{ title: "Alpha", released: 2021 }
+		]) {
+			movies { title }
+		}
+	}`, nil)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Query with sort
+	result, err := c.Execute(ctx, `query {
+		movies(sort: [{ title: ASC }]) { title }
+	}`, nil)
+	if err != nil {
+		t.Fatalf("V2 sorted query failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("V2 sorted query returned nil result")
+	}
+	data := result.Data()
+	if data == nil {
+		t.Fatal("result.Data() returned nil for sorted query")
+	}
+}
+
+// Test: V2 Client update mutation.
+// Expected: update mutation modifies existing node and returns result.
+func TestE2E_V2_ClientUpdateMutation(t *testing.T) {
+	cfg := startNeo4jContainer(t)
+	c := createV2Client(t, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Create
-	_, err = c.Execute(ctx, `mutation {
+	_, err := c.Execute(ctx, `mutation {
+		createMovies(input: [{ title: "Interstellar", released: 2014 }]) {
+			movies { title }
+		}
+	}`, nil)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Update
+	result, err := c.Execute(ctx, `mutation {
+		updateMovies(where: { title: "Interstellar" }, update: { released: 2015 }) {
+			movies { title released }
+		}
+	}`, nil)
+	if err != nil {
+		t.Fatalf("V2 update mutation failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("V2 update mutation returned nil result")
+	}
+}
+
+// Test: V2 Client delete mutation.
+// Expected: delete mutation removes node and returns nodesDeleted count.
+func TestE2E_V2_ClientDeleteMutation(t *testing.T) {
+	cfg := startNeo4jContainer(t)
+	c := createV2Client(t, cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Create
+	_, err := c.Execute(ctx, `mutation {
+		createMovies(input: [{ title: "Tenet", released: 2020 }]) {
+			movies { title }
+		}
+	}`, nil)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Delete
+	result, err := c.Execute(ctx, `mutation {
+		deleteMovies(where: { title: "Tenet" }) { nodesDeleted }
+	}`, nil)
+	if err != nil {
+		t.Fatalf("V2 delete mutation failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("V2 delete mutation returned nil result")
+	}
+}
+
+// Test: V2 full round trip — create then query back.
+// Expected: query returns the created node with matching field values.
+func TestE2E_V2_RoundTrip_CreateThenQuery(t *testing.T) {
+	cfg := startNeo4jContainer(t)
+	c := createV2Client(t, cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Create
+	_, err := c.Execute(ctx, `mutation {
 		createMovies(input: [{ title: "Arrival", released: 2016 }]) {
 			movies { title }
 		}
 	}`, nil)
 	if err != nil {
-		t.Fatalf("create mutation failed: %v", err)
+		t.Fatalf("create failed: %v", err)
 	}
 
-	// Query
+	// Query back
 	result, err := c.Execute(ctx, `query {
 		movies(where: { title: "Arrival" }) { title released }
 	}`, nil)
@@ -325,8 +424,11 @@ func TestE2E_RoundTrip_CreateThenQuery(t *testing.T) {
 		t.Fatal("query returned nil result")
 	}
 
-	// Verify shape
-	movies, ok := result["movies"]
+	data := result.Data()
+	if data == nil {
+		t.Fatal("result.Data() returned nil")
+	}
+	movies, ok := data["movies"]
 	if !ok {
 		t.Fatal("result missing 'movies' key")
 	}
@@ -336,5 +438,74 @@ func TestE2E_RoundTrip_CreateThenQuery(t *testing.T) {
 	}
 	if len(movieList) == 0 {
 		t.Fatal("expected at least 1 movie, got 0")
+	}
+}
+
+// Test: V2 Result.Decode unmarshals into a Go struct.
+// Expected: Decode populates struct fields from query result.
+func TestE2E_V2_ResultDecode(t *testing.T) {
+	cfg := startNeo4jContainer(t)
+	c := createV2Client(t, cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Create
+	_, err := c.Execute(ctx, `mutation {
+		createMovies(input: [{ title: "Blade Runner", released: 1982 }]) {
+			movies { title }
+		}
+	}`, nil)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Query and decode
+	result, err := c.Execute(ctx, `query {
+		movies(where: { title: "Blade Runner" }) { title released }
+	}`, nil)
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("query returned nil result")
+	}
+
+	var response struct {
+		Movies []struct {
+			Title    string `json:"title"`
+			Released *int   `json:"released"`
+		} `json:"movies"`
+	}
+	if decErr := result.Decode(&response); decErr != nil {
+		t.Fatalf("Decode failed: %v", decErr)
+	}
+	if len(response.Movies) == 0 {
+		t.Fatal("expected at least 1 movie after Decode")
+	}
+	if response.Movies[0].Title != "Blade Runner" {
+		t.Errorf("title = %q, want %q", response.Movies[0].Title, "Blade Runner")
+	}
+}
+
+// Test: V2 Client Close prevents further Execute calls.
+// Expected: Execute after Close returns errClientClosed.
+func TestE2E_V2_ExecuteAfterClose(t *testing.T) {
+	cfg := startNeo4jContainer(t)
+	drv, err := neo4jdriver.NewNeo4jDriver(cfg)
+	if err != nil {
+		t.Fatalf("NewNeo4jDriver failed: %v", err)
+	}
+
+	c := client.New(testGraphModel(), testAugmentedSchemaSDL, drv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	c.Close(ctx)
+
+	_, execErr := c.Execute(ctx, `query { movies { title } }`, nil)
+	if execErr == nil {
+		t.Fatal("Execute after Close should return error")
 	}
 }

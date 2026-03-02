@@ -7,10 +7,8 @@ import (
 )
 
 // NewClient creates a new gql-orm client backed by the given driver.
-// It wires the generated Resolver and gqlgen ExecutableSchema together
-// and returns a ready-to-use *client.Client.
-func NewClient(drv driver.Driver) *client.Client {
-	resolver := &Resolver{Driver: drv}
-	es := NewExecutableSchema(Config{Resolvers: resolver})
-	return client.New(es, drv)
+// Uses the generated GraphModel and AugmentedSchemaSDL for query validation
+// and single-roundtrip Cypher translation.
+func NewClient(drv driver.Driver, opts ...client.Option) *client.Client {
+	return client.New(GraphModel, AugmentedSchemaSDL, drv, opts...)
 }

@@ -11,7 +11,7 @@ import (
 // function accepts variadic client.Option parameters.
 // Expected: generated source contains "opts ...client.Option" in NewClient signature.
 func TestGenerateClient_AcceptsOptions(t *testing.T) {
-	src, err := GenerateClient(resolverModel(), "generated")
+	src, err := GenerateClient(movieModel(), "generated")
 	if err != nil {
 		t.Fatalf("GenerateClient returned error: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestGenerateClient_AcceptsOptions(t *testing.T) {
 // NewClient passes the options through to client.New().
 // Expected: generated source contains "client.New(es, drv, opts...)" or similar.
 func TestGenerateClient_PassesOptionsToClientNew(t *testing.T) {
-	src, err := GenerateClient(resolverModel(), "generated")
+	src, err := GenerateClient(movieModel(), "generated")
 	if err != nil {
 		t.Fatalf("GenerateClient returned error: %v", err)
 	}

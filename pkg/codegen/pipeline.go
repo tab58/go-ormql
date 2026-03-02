@@ -16,16 +16,12 @@ type Config struct {
 	PackageName string   // Go package name for generated code
 }
 
-// Generate runs the full code generation pipeline in sequence:
+// Generate runs the full V2 code generation pipeline in sequence:
 //  1. ParseSchema(cfg.SchemaFiles) → GraphModel
 //  2. AugmentSchema(model) → write <OutputDir>/schema.graphql
-//  3. GenerateGqlgenConfig → write <OutputDir>/gqlgen.yml
-//  4. Clean stale generated Go files and scaffold from previous runs
-//  5. InvokeGqlgen → generates Go model types + resolver interfaces
-//  6. deleteResolverScaffold → removes freshly generated scaffold (resolver.go, *.resolvers.go)
-//  7. GenerateResolvers(model) → write <OutputDir>/resolvers_gen.go
-//  8. GenerateMappers(model) → write <OutputDir>/mappers_gen.go
-//  9. GenerateClient(model) → write <OutputDir>/client_gen.go
+//  3. GenerateModels(model) → write <OutputDir>/models_gen.go
+//  4. GenerateGraphModelRegistry(model, augSDL) → write <OutputDir>/graphmodel_gen.go
+//  5. GenerateClient(model) → write <OutputDir>/client_gen.go
 //
 // All output goes to cfg.OutputDir. Re-running overwrites all generated files.
 func Generate(cfg Config) error {
@@ -46,6 +42,9 @@ func Generate(cfg Config) error {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
+	// Clean stale generated files from previous runs.
+	cleanGeneratedGoFiles(cfg.OutputDir)
+
 	// 1. Parse schema.
 	model, err := schema.ParseSchema(cfg.SchemaFiles)
 	if err != nil {
@@ -62,54 +61,25 @@ func Generate(cfg Config) error {
 		return fmt.Errorf("failed to write augmented schema: %w", err)
 	}
 
-	// 3. Generate gqlgen config and write to output.
-	gqlgenCfg := GqlgenConfig{
-		SchemaPath:  schemaPath,
-		OutputDir:   cfg.OutputDir,
-		PackageName: packageName,
-	}
-	configContent, err := GenerateGqlgenConfig(gqlgenCfg)
+	// 3. Generate models and write to output.
+	modelsSrc, err := GenerateModels(model, packageName)
 	if err != nil {
-		return fmt.Errorf("failed to generate gqlgen config: %w", err)
+		return fmt.Errorf("failed to generate models: %w", err)
 	}
-	configPath := filepath.Join(cfg.OutputDir, "gqlgen.yml")
-	if err := writeGeneratedFile(configPath, []byte(configContent)); err != nil {
-		return fmt.Errorf("failed to write gqlgen config: %w", err)
-	}
-
-	// 4. Clean up previously generated Go files (including scaffold) before
-	// invoking gqlgen. On re-runs, stale files can cause validation errors.
-	cleanGeneratedGoFiles(cfg.OutputDir)
-
-	// 5. Invoke gqlgen to generate Go model types + resolver interfaces.
-	if err := InvokeGqlgen(configPath); err != nil {
-		return fmt.Errorf("gqlgen generation failed: %w", err)
+	if err := writeGeneratedFile(filepath.Join(cfg.OutputDir, "models_gen.go"), modelsSrc); err != nil {
+		return fmt.Errorf("failed to write models: %w", err)
 	}
 
-	// 6. Delete gqlgen resolver scaffold files to prevent conflicts.
-	if err := deleteResolverScaffold(cfg.OutputDir); err != nil {
-		return fmt.Errorf("failed to delete resolver scaffold: %w", err)
-	}
-
-	// 7. Generate resolvers and write to output.
-	resolverSrc, err := GenerateResolvers(model, packageName)
+	// 4. Generate GraphModel registry and write to output.
+	registrySrc, err := GenerateGraphModelRegistry(model, augmented, packageName)
 	if err != nil {
-		return fmt.Errorf("failed to generate resolvers: %w", err)
+		return fmt.Errorf("failed to generate graph model registry: %w", err)
 	}
-	if err := writeGeneratedFile(filepath.Join(cfg.OutputDir, "resolvers_gen.go"), resolverSrc); err != nil {
-		return fmt.Errorf("failed to write resolvers: %w", err)
-	}
-
-	// 8. Generate mappers and write to output.
-	mapperSrc, err := GenerateMappers(model, packageName)
-	if err != nil {
-		return fmt.Errorf("failed to generate mappers: %w", err)
-	}
-	if err := writeGeneratedFile(filepath.Join(cfg.OutputDir, "mappers_gen.go"), mapperSrc); err != nil {
-		return fmt.Errorf("failed to write mappers: %w", err)
+	if err := writeGeneratedFile(filepath.Join(cfg.OutputDir, "graphmodel_gen.go"), registrySrc); err != nil {
+		return fmt.Errorf("failed to write graph model registry: %w", err)
 	}
 
-	// 9. Generate client constructor and write to output.
+	// 5. Generate client constructor and write to output.
 	clientSrc, err := GenerateClient(model, packageName)
 	if err != nil {
 		return fmt.Errorf("failed to generate client: %w", err)
@@ -149,9 +119,9 @@ func deleteResolverScaffold(dir string) error {
 }
 
 // cleanGeneratedGoFiles removes stale generated files from the output directory.
-// This prevents stale files from causing gqlgen validation errors on re-runs.
+// This prevents stale files from causing errors on re-runs.
 // Removes: *_gen.go (our naming convention), resolver.go and *.resolvers.go
-// (gqlgen scaffold files that conflict with our resolvers_gen.go).
+// (V1 scaffold files), gqlgen.yml (V1 config).
 func cleanGeneratedGoFiles(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -162,7 +132,7 @@ func cleanGeneratedGoFiles(dir string) {
 			continue
 		}
 		name := e.Name()
-		if strings.HasSuffix(name, "_gen.go") || name == "resolver.go" || strings.HasSuffix(name, ".resolvers.go") {
+		if strings.HasSuffix(name, "_gen.go") || name == "resolver.go" || strings.HasSuffix(name, ".resolvers.go") || name == "gqlgen.yml" {
 			os.Remove(filepath.Join(dir, name))
 		}
 	}

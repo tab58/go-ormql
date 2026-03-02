@@ -124,9 +124,9 @@ func TestGenerate_WritesAugmentedSchema(t *testing.T) {
 	}
 }
 
-// TestGenerate_WritesGqlgenConfig verifies that Generate writes gqlgen.yml
-// to the output directory.
-func TestGenerate_WritesGqlgenConfig(t *testing.T) {
+// TestGenerate_WritesModelsGen verifies that Generate writes models_gen.go
+// to the output directory (V2 pipeline step 3).
+func TestGenerate_WritesModelsGen(t *testing.T) {
 	schemaPath := writeSampleSchema(t)
 	outputDir := t.TempDir()
 
@@ -138,15 +138,15 @@ func TestGenerate_WritesGqlgenConfig(t *testing.T) {
 
 	Generate(cfg)
 
-	configPath := filepath.Join(outputDir, "gqlgen.yml")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		t.Fatal("Generate did not write gqlgen.yml to output directory")
+	modelsPath := filepath.Join(outputDir, "models_gen.go")
+	if _, err := os.Stat(modelsPath); os.IsNotExist(err) {
+		t.Fatal("Generate did not write models_gen.go to output directory")
 	}
 }
 
-// TestGenerate_WritesResolvers verifies that Generate writes resolvers_gen.go
-// to the output directory.
-func TestGenerate_WritesResolvers(t *testing.T) {
+// TestGenerate_WritesGraphModelGen verifies that Generate writes graphmodel_gen.go
+// to the output directory (V2 pipeline step 4).
+func TestGenerate_WritesGraphModelGen(t *testing.T) {
 	schemaPath := writeSampleSchema(t)
 	outputDir := t.TempDir()
 
@@ -158,29 +158,9 @@ func TestGenerate_WritesResolvers(t *testing.T) {
 
 	Generate(cfg)
 
-	resolversPath := filepath.Join(outputDir, "resolvers_gen.go")
-	if _, err := os.Stat(resolversPath); os.IsNotExist(err) {
-		t.Fatal("Generate did not write resolvers_gen.go to output directory")
-	}
-}
-
-// TestGenerate_WritesMappers verifies that Generate writes mappers_gen.go
-// to the output directory.
-func TestGenerate_WritesMappers(t *testing.T) {
-	schemaPath := writeSampleSchema(t)
-	outputDir := t.TempDir()
-
-	cfg := Config{
-		SchemaFiles: []string{schemaPath},
-		OutputDir:   outputDir,
-		PackageName: "generated",
-	}
-
-	Generate(cfg)
-
-	mappersPath := filepath.Join(outputDir, "mappers_gen.go")
-	if _, err := os.Stat(mappersPath); os.IsNotExist(err) {
-		t.Fatal("Generate did not write mappers_gen.go to output directory")
+	registryPath := filepath.Join(outputDir, "graphmodel_gen.go")
+	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
+		t.Fatal("Generate did not write graphmodel_gen.go to output directory")
 	}
 }
 
@@ -406,5 +386,139 @@ func TestConfig_HasExpectedFields(t *testing.T) {
 	}
 	if cfg.PackageName != "generated" {
 		t.Errorf("PackageName = %q, want %q", cfg.PackageName, "generated")
+	}
+}
+
+// --- CG-23: V2 pipeline (5 steps) tests ---
+// The V2 pipeline produces exactly 4 output files:
+// schema.graphql, models_gen.go, graphmodel_gen.go, client_gen.go.
+// It does NOT produce gqlgen.yml, resolvers_gen.go, or mappers_gen.go.
+
+// Test: V2 Generate returns no error for valid input.
+// Expected: nil error — V2 has no InvokeGqlgen or other external tool calls.
+func TestGenerate_V2_ReturnsNoError(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	err := Generate(cfg)
+	if err != nil {
+		t.Fatalf("V2 Generate should not return error, got: %v", err)
+	}
+}
+
+// Test: V2 pipeline writes models_gen.go to output directory.
+// Expected: models_gen.go exists after Generate().
+func TestGenerate_V2_WritesModelsGen(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	Generate(cfg)
+	if _, err := os.Stat(filepath.Join(outputDir, "models_gen.go")); os.IsNotExist(err) {
+		t.Fatal("V2 pipeline should write models_gen.go to output directory")
+	}
+}
+
+// Test: V2 pipeline writes graphmodel_gen.go to output directory.
+// Expected: graphmodel_gen.go exists after Generate().
+func TestGenerate_V2_WritesGraphModelGen(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	Generate(cfg)
+	if _, err := os.Stat(filepath.Join(outputDir, "graphmodel_gen.go")); os.IsNotExist(err) {
+		t.Fatal("V2 pipeline should write graphmodel_gen.go to output directory")
+	}
+}
+
+// Test: V2 pipeline does NOT write gqlgen.yml (gqlgen removed in V2).
+// Expected: gqlgen.yml does NOT exist after Generate().
+func TestGenerate_V2_NoGqlgenConfig(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	Generate(cfg)
+	if _, err := os.Stat(filepath.Join(outputDir, "gqlgen.yml")); err == nil {
+		t.Fatal("V2 pipeline should NOT produce gqlgen.yml (gqlgen removed)")
+	}
+}
+
+// Test: V2 pipeline does NOT write resolvers_gen.go (V1 artifact).
+// Expected: resolvers_gen.go does NOT exist after Generate().
+func TestGenerate_V2_NoResolversGen(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	Generate(cfg)
+	if _, err := os.Stat(filepath.Join(outputDir, "resolvers_gen.go")); err == nil {
+		t.Fatal("V2 pipeline should NOT produce resolvers_gen.go (V1 artifact)")
+	}
+}
+
+// Test: V2 pipeline does NOT write mappers_gen.go (V1 artifact).
+// Expected: mappers_gen.go does NOT exist after Generate().
+func TestGenerate_V2_NoMappersGen(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	Generate(cfg)
+	if _, err := os.Stat(filepath.Join(outputDir, "mappers_gen.go")); err == nil {
+		t.Fatal("V2 pipeline should NOT produce mappers_gen.go (V1 artifact)")
+	}
+}
+
+// Test: V2 pipeline produces exactly 4 output files.
+// Expected: schema.graphql, models_gen.go, graphmodel_gen.go, client_gen.go.
+func TestGenerate_V2_ExactlyFourFiles(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	err := Generate(cfg)
+	if err != nil {
+		t.Fatalf("V2 Generate should succeed, got: %v", err)
+	}
+	entries, readErr := os.ReadDir(outputDir)
+	if readErr != nil {
+		t.Fatalf("failed to read output dir: %v", readErr)
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			files = append(files, e.Name())
+		}
+	}
+	if len(files) != 4 {
+		t.Fatalf("V2 pipeline should produce exactly 4 files, got %d: %v", len(files), files)
+	}
+}
+
+// Test: V2 models_gen.go contains correct package declaration.
+// Expected: file content includes "package generated".
+func TestGenerate_V2_ModelsGenContainsPackage(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	Generate(cfg)
+	content, err := os.ReadFile(filepath.Join(outputDir, "models_gen.go"))
+	if err != nil {
+		t.Fatalf("failed to read models_gen.go: %v", err)
+	}
+	if !strings.Contains(string(content), "package generated") {
+		t.Error("models_gen.go should contain 'package generated'")
+	}
+}
+
+// Test: V2 graphmodel_gen.go contains GraphModel variable declaration.
+// Expected: file content includes "var GraphModel".
+func TestGenerate_V2_GraphModelGenContainsVar(t *testing.T) {
+	schemaPath := writeSampleSchema(t)
+	outputDir := t.TempDir()
+	cfg := Config{SchemaFiles: []string{schemaPath}, OutputDir: outputDir, PackageName: "generated"}
+	Generate(cfg)
+	content, err := os.ReadFile(filepath.Join(outputDir, "graphmodel_gen.go"))
+	if err != nil {
+		t.Fatalf("failed to read graphmodel_gen.go: %v", err)
+	}
+	if !strings.Contains(string(content), "var GraphModel") {
+		t.Error("graphmodel_gen.go should contain 'var GraphModel' declaration")
 	}
 }

@@ -15,18 +15,16 @@ import (
 )
 
 // NewClient creates a new gql-orm client backed by the given driver.
-// It wires the generated Resolver and gqlgen ExecutableSchema together
-// and returns a ready-to-use *client.Client.
+// Uses the generated GraphModel and AugmentedSchemaSDL for query validation
+// and single-roundtrip Cypher translation.
 func NewClient(drv driver.Driver, opts ...client.Option) *client.Client {
-	resolver := &Resolver{Driver: drv}
-	es := NewExecutableSchema(Config{Resolvers: resolver})
-	return client.New(es, drv, opts...)
+	return client.New(GraphModel, AugmentedSchemaSDL, drv, opts...)
 }
 `
 
 // GenerateClient produces Go source code for a client_gen.go file containing
-// a NewClient convenience constructor. The generated NewClient function wires
-// the generated Resolver, gqlgen ExecutableSchema, and pkg/client.Client together.
+// a NewClient convenience constructor. The generated NewClient function calls
+// client.New with the generated GraphModel and AugmentedSchemaSDL variables.
 func GenerateClient(model schema.GraphModel, packageName string) ([]byte, error) {
 	return executeTemplate("client", clientTemplate, template.FuncMap{}, model, packageName)
 }
