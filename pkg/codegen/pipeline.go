@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,11 +10,15 @@ import (
 	"github.com/tab58/gql-orm/pkg/schema"
 )
 
+// vectorWarning is printed to stderr when @vector directives are detected.
+const vectorWarning = "Warning: @vector directive requires Neo4j 5.11+"
+
 // Config controls the code generation pipeline.
 type Config struct {
-	SchemaFiles []string // paths to .graphql schema files
-	OutputDir   string   // directory for all generated output
-	PackageName string   // Go package name for generated code
+	SchemaFiles []string  // paths to .graphql schema files
+	OutputDir   string    // directory for all generated output
+	PackageName string    // Go package name for generated code
+	Stderr      io.Writer // optional writer for warnings (e.g., os.Stderr)
 }
 
 // Generate runs the full V2 code generation pipeline in sequence:
@@ -22,6 +27,7 @@ type Config struct {
 //  3. GenerateModels(model) → write <OutputDir>/models_gen.go
 //  4. GenerateGraphModelRegistry(model, augSDL) → write <OutputDir>/graphmodel_gen.go
 //  5. GenerateClient(model) → write <OutputDir>/client_gen.go
+//  6. GenerateIndexes(model) → write <OutputDir>/indexes_gen.go (conditional — only when @vector present)
 //
 // All output goes to cfg.OutputDir. Re-running overwrites all generated files.
 func Generate(cfg Config) error {
@@ -49,6 +55,11 @@ func Generate(cfg Config) error {
 	model, err := schema.ParseSchema(cfg.SchemaFiles)
 	if err != nil {
 		return fmt.Errorf("schema parse failed: %w", err)
+	}
+
+	// Emit @vector warning if any node uses the directive.
+	if cfg.Stderr != nil && model.HasVectorField() {
+		fmt.Fprintln(cfg.Stderr, vectorWarning)
 	}
 
 	// 2. Augment schema and write to output.
@@ -86,6 +97,17 @@ func Generate(cfg Config) error {
 	}
 	if err := writeGeneratedFile(filepath.Join(cfg.OutputDir, "client_gen.go"), clientSrc); err != nil {
 		return fmt.Errorf("failed to write client: %w", err)
+	}
+
+	// 6. Generate vector indexes (conditional — only when @vector is present).
+	indexesSrc, err := GenerateIndexes(model, packageName)
+	if err != nil {
+		return fmt.Errorf("failed to generate indexes: %w", err)
+	}
+	if indexesSrc != nil {
+		if err := writeGeneratedFile(filepath.Join(cfg.OutputDir, "indexes_gen.go"), indexesSrc); err != nil {
+			return fmt.Errorf("failed to write indexes: %w", err)
+		}
 	}
 
 	return nil

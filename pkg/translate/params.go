@@ -8,10 +8,11 @@ import "fmt"
 // the final Statement. Parameters are globally unique across the entire query
 // via namespacing.
 type paramScope struct {
-	prefix   string
-	next     int
-	params   map[string]any
-	children []*paramScope
+	prefix    string
+	next      int
+	params    map[string]any
+	children  []*paramScope
+	variables map[string]any
 }
 
 // newParamScope creates a root parameter scope.
@@ -27,9 +28,10 @@ func newParamScope() *paramScope {
 // e.g., scope.sub("sub0") creates prefix "sub0_" for nested parameters.
 func (s *paramScope) sub(name string) *paramScope {
 	child := &paramScope{
-		prefix: s.prefix + name + "_",
-		next:   0,
-		params: make(map[string]any),
+		prefix:    s.prefix + name + "_",
+		next:      0,
+		params:    make(map[string]any),
+		variables: s.variables,
 	}
 	s.children = append(s.children, child)
 	return child

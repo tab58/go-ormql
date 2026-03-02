@@ -2,24 +2,29 @@ package schema
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// Directive name constants for @node, @relationship, @relationshipProperties, and @cypher.
+// Directive name constants for @node, @relationship, @relationshipProperties, @cypher, and @vector.
 const (
 	directiveNode                   = "node"
 	directiveRelationship           = "relationship"
 	directiveRelationshipProperties = "relationshipProperties"
 	directiveCypher                 = "cypher"
+	directiveVector                 = "vector"
 )
 
-// Directive argument name constants for @relationship and @cypher.
+// Directive argument name constants for @relationship, @cypher, and @vector.
 const (
 	argType       = "type"
 	argDirection  = "direction"
 	argProperties = "properties"
 	argStatement  = "statement"
+	argIndexName  = "indexName"
+	argDimensions = "dimensions"
+	argSimilarity = "similarity"
 )
 
 // BuiltinDirectiveDefs returns the GraphQL SDL string for the built-in
@@ -36,6 +41,7 @@ directive @node on OBJECT
 directive @relationship(type: String!, direction: RelationshipDirection!, properties: String) on FIELD_DEFINITION
 directive @relationshipProperties on OBJECT
 directive @cypher(statement: String!) on FIELD_DEFINITION
+directive @vector(indexName: String!, dimensions: Int!, similarity: String!) on FIELD_DEFINITION
 `
 }
 
@@ -151,7 +157,9 @@ func ValidateDirectives(doc *ast.SchemaDocument) []error {
 		for _, field := range def.Fields {
 			errs = append(errs, validateRelationshipField(field, propsTypes)...)
 			errs = append(errs, validateCypherField(field)...)
+			errs = append(errs, validateVectorField(field)...)
 		}
+		errs = append(errs, validateOneVectorPerNode(def)...)
 	}
 
 	return errs
@@ -222,6 +230,115 @@ func validateCypherField(field *ast.FieldDefinition) []error {
 		}
 	}
 	return errs
+}
+
+// validateVectorField validates @vector directives on a single field.
+// Returns errors for mutual exclusivity with @cypher and @relationship,
+// and for incorrect field type (must be [Float!]!).
+func validateVectorField(field *ast.FieldDefinition) []error {
+	var errs []error
+	hasVector := false
+	hasCypher := false
+	hasRelationship := false
+	for _, d := range field.Directives {
+		switch d.Name {
+		case directiveVector:
+			hasVector = true
+		case directiveCypher:
+			hasCypher = true
+		case directiveRelationship:
+			hasRelationship = true
+		}
+	}
+	if !hasVector {
+		return nil
+	}
+	if hasCypher {
+		errs = append(errs, fmt.Errorf("field %q has both @vector and @cypher directives (mutually exclusive)", field.Name))
+	}
+	if hasRelationship {
+		errs = append(errs, fmt.Errorf("field %q has both @vector and @relationship directives (mutually exclusive)", field.Name))
+	}
+	// Validate field type is [Float!]!
+	if !isVectorFieldType(field.Type) {
+		errs = append(errs, fmt.Errorf("@vector on field %q requires type [Float!]!, got %s", field.Name, formatGraphQLType(field.Type)))
+	}
+	return errs
+}
+
+// isVectorFieldType checks whether a type is exactly [Float!]! (non-null list of non-null Float).
+func isVectorFieldType(t *ast.Type) bool {
+	if t == nil {
+		return false
+	}
+	// Must be non-null list
+	if !t.NonNull || t.Elem == nil {
+		return false
+	}
+	// Element must be non-null Float
+	return t.Elem.NonNull && t.Elem.NamedType == "Float"
+}
+
+// validateOneVectorPerNode checks that a @node type has at most one @vector field.
+func validateOneVectorPerNode(def *ast.Definition) []error {
+	if def == nil || def.Kind != ast.Object {
+		return nil
+	}
+	isNode := false
+	for _, d := range def.Directives {
+		if d.Name == directiveNode {
+			isNode = true
+			break
+		}
+	}
+	if !isNode {
+		return nil
+	}
+	vectorCount := 0
+	for _, field := range def.Fields {
+		for _, d := range field.Directives {
+			if d.Name == directiveVector {
+				vectorCount++
+			}
+		}
+	}
+	if vectorCount > 1 {
+		return []error{fmt.Errorf("type %q has %d @vector fields (at most one allowed per @node)", def.Name, vectorCount)}
+	}
+	return nil
+}
+
+// VectorDirectiveInfo holds extraction results for @vector on a field definition.
+type VectorDirectiveInfo struct {
+	HasDirective bool
+	IndexName    string
+	Dimensions   int
+	Similarity   string
+}
+
+// ExtractVectorDirective extracts @vector directive arguments from a field definition.
+// Returns HasDirective=false if the field does not have the directive.
+func ExtractVectorDirective(field *ast.FieldDefinition) VectorDirectiveInfo {
+	if field == nil {
+		return VectorDirectiveInfo{}
+	}
+	for _, d := range field.Directives {
+		if d.Name == directiveVector {
+			info := VectorDirectiveInfo{HasDirective: true}
+			if arg := d.Arguments.ForName(argIndexName); arg != nil {
+				info.IndexName = arg.Value.Raw
+			}
+			if arg := d.Arguments.ForName(argDimensions); arg != nil {
+				n, _ := strconv.Atoi(arg.Value.Raw)
+				info.Dimensions = n
+			}
+			if arg := d.Arguments.ForName(argSimilarity); arg != nil {
+				info.Similarity = arg.Value.Raw
+			}
+			return info
+		}
+	}
+	return VectorDirectiveInfo{}
 }
 
 // formatDirectiveLocation formats a position as "file:line:col: " for error messages.

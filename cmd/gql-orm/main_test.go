@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,5 +213,79 @@ func TestCLN2_GenerateStillWorks(t *testing.T) {
 		if strings.Contains(s, "unknown") {
 			t.Errorf("generate should still be recognized after serve removal: %v", err)
 		}
+	}
+}
+
+// --- CG-28: CLI @vector warning tests ---
+
+// writeTempSchemaWithVector writes a .graphql schema with @vector directive
+// to a temp directory and returns the file path.
+func writeTempSchemaWithVector(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "schema.graphql")
+	sdl := `type Movie @node {
+	id: ID!
+	title: String!
+	embedding: [Float!]! @vector(indexName: "movie_embeddings", dimensions: 1536, similarity: "cosine")
+}
+`
+	if err := os.WriteFile(path, []byte(sdl), 0644); err != nil {
+		t.Fatalf("failed to write temp schema with @vector: %v", err)
+	}
+	return path
+}
+
+// Test: CLI prints @vector warning to stderr when schema has @vector directive.
+// Expected: stderr contains "Warning: @vector directive requires Neo4j 5.11+".
+func TestRunGenerate_VectorWarningToStderr(t *testing.T) {
+	schemaPath := writeTempSchemaWithVector(t)
+	outputDir := t.TempDir()
+
+	// Capture stderr by replacing os.Stderr with a pipe.
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stderr = w
+
+	runGenerate([]string{"--schema", schemaPath, "--output", outputDir})
+
+	w.Close()
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	os.Stderr = origStderr
+
+	stderr := buf.String()
+	if !strings.Contains(stderr, "Warning: @vector directive requires Neo4j 5.11+") {
+		t.Errorf("expected @vector warning in stderr, got: %q", stderr)
+	}
+}
+
+// Test: CLI does NOT print @vector warning when schema has no @vector directive.
+// Expected: stderr does NOT contain "@vector" or "Neo4j 5.11".
+func TestRunGenerate_NoVectorNoWarning(t *testing.T) {
+	schemaPath := writeTempSchema(t) // no @vector
+	outputDir := t.TempDir()
+
+	// Capture stderr by replacing os.Stderr with a pipe.
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stderr = w
+
+	runGenerate([]string{"--schema", schemaPath, "--output", outputDir})
+
+	w.Close()
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	os.Stderr = origStderr
+
+	stderr := buf.String()
+	if strings.Contains(stderr, "@vector") {
+		t.Errorf("stderr should NOT contain @vector warning without @vector directive: %q", stderr)
 	}
 }

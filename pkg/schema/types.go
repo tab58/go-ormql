@@ -17,8 +17,17 @@ var goTypeMap = map[string]string{
 	"Float!":   "float64",
 	"Boolean!": "bool",
 	"ID!":      "string",
-	// List types
-	"[String!]": "[]string",
+	// List types (non-nullable and nullable outer)
+	"[String!]":  "[]string",
+	"[String!]!": "[]string",
+	"[Int!]":     "[]int",
+	"[Int!]!":    "[]int",
+	"[Float!]":   "[]float64",
+	"[Float!]!":  "[]float64",
+	"[Boolean!]": "[]bool",
+	"[Boolean!]!": "[]bool",
+	"[ID!]":      "[]string",
+	"[ID!]!":     "[]string",
 }
 
 // cypherTypeMap maps GraphQL scalar types to Cypher types.
@@ -34,7 +43,16 @@ var cypherTypeMap = map[string]string{
 	"Boolean!":  "BOOLEAN",
 	"ID":        "STRING",
 	"ID!":       "STRING",
-	"[String!]": "LIST<STRING>",
+	"[String!]":  "LIST<STRING>",
+	"[String!]!": "LIST<STRING>",
+	"[Int!]":     "LIST<INTEGER>",
+	"[Int!]!":    "LIST<INTEGER>",
+	"[Float!]":   "LIST<FLOAT>",
+	"[Float!]!":  "LIST<FLOAT>",
+	"[Boolean!]": "LIST<BOOLEAN>",
+	"[Boolean!]!": "LIST<BOOLEAN>",
+	"[ID!]":      "LIST<STRING>",
+	"[ID!]!":     "LIST<STRING>",
 }
 
 // GraphQLToGoType converts a GraphQL type string to its Go type equivalent.

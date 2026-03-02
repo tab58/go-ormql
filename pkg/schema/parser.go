@@ -109,6 +109,7 @@ func parseFromSources(sources []*ast.Source) (GraphModel, error) {
 
 		var scalarFields []FieldDefinition
 		var cypherFields []CypherFieldDefinition
+		var vectorField *VectorFieldDefinition
 		for _, f := range t.Fields {
 			relInfo := ExtractRelationshipDirective(f)
 			if relInfo.HasDirective {
@@ -136,6 +137,17 @@ func parseFromSources(sources []*ast.Source) (GraphModel, error) {
 				continue
 			}
 
+			// Check for @vector — field is also kept in Fields as a regular scalar
+			vecInfo := ExtractVectorDirective(f)
+			if vecInfo.HasDirective {
+				vectorField = &VectorFieldDefinition{
+					Name:       f.Name,
+					IndexName:  vecInfo.IndexName,
+					Dimensions: vecInfo.Dimensions,
+					Similarity: vecInfo.Similarity,
+				}
+			}
+
 			// Scalar field
 			fd := buildFieldDefinition(f, enumNames)
 			scalarFields = append(scalarFields, fd)
@@ -146,6 +158,7 @@ func parseFromSources(sources []*ast.Source) (GraphModel, error) {
 			Labels:       []string{t.Name},
 			Fields:       scalarFields,
 			CypherFields: cypherFields,
+			VectorField:  vectorField,
 		})
 	}
 
@@ -232,12 +245,16 @@ func buildCypherFieldDefinition(f *ast.FieldDefinition, cypherInfo CypherDirecti
 	}
 }
 
-// formatGraphQLType converts an ast.Type to a string representation like "String!", "Int", "[String!]".
+// formatGraphQLType converts an ast.Type to a string representation like "String!", "Int", "[String!]!", "[Float]".
 func formatGraphQLType(t *ast.Type) string {
 	if t.Elem != nil {
-		// List type: [ElementType]
+		// List type: [ElementType] or [ElementType]!
 		inner := formatGraphQLType(t.Elem)
-		return "[" + inner + "]"
+		s := "[" + inner + "]"
+		if t.NonNull {
+			s += "!"
+		}
+		return s
 	}
 	name := t.NamedType
 	if t.NonNull {

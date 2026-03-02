@@ -62,6 +62,11 @@ func GenerateModels(model schema.GraphModel, packageName string) ([]byte, error)
 		// Mutation response types
 		modelsWriteMutationResponseTypes(&sb, node)
 
+		// SimilarResult type for vector similarity queries
+		if node.VectorField != nil {
+			modelsWriteSimilarResultType(&sb, node)
+		}
+
 		// Relationship-specific types
 		for _, rel := range rels {
 			if rel.FromNode == node.Name {
@@ -295,6 +300,15 @@ func modelsWriteMutationResponseTypes(sb *strings.Builder, node schema.NodeDefin
 	// Update response
 	sb.WriteString(fmt.Sprintf("type Update%sMutationResponse struct {\n", plural))
 	sb.WriteString(fmt.Sprintf("\t%s []*%s `json:%q`\n", plural, node.Name, strutil.PluralLower(node.Name)))
+	sb.WriteString("}\n\n")
+}
+
+// modelsWriteSimilarResultType writes the {Node}SimilarResult struct for vector similarity queries.
+// Pattern: type {Node}SimilarResult struct { Score float64, Node *{Node} }
+func modelsWriteSimilarResultType(sb *strings.Builder, node schema.NodeDefinition) {
+	sb.WriteString(fmt.Sprintf("type %sSimilarResult struct {\n", node.Name))
+	sb.WriteString("\tScore float64 `json:\"score\"`\n")
+	sb.WriteString(fmt.Sprintf("\tNode  *%s     `json:\"node\"`\n", node.Name))
 	sb.WriteString("}\n\n")
 }
 

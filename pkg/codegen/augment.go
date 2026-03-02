@@ -34,7 +34,7 @@ func AugmentSchema(model schema.GraphModel) (string, error) {
 		writeNodeType(&b, node, relsByNode[node.Name])
 	}
 
-	// Generate input types, response types, and connection types per node.
+	// Generate input types, response types, connection types, and similar result types per node.
 	for _, node := range model.Nodes {
 		rels := relationshipsForNode(model, node.Name)
 		writeWhereInput(&b, node)
@@ -44,6 +44,9 @@ func AugmentSchema(model schema.GraphModel) (string, error) {
 		writeCreateResponse(&b, node)
 		writeUpdateResponse(&b, node)
 		writeConnectionTypes(&b, node)
+		if node.VectorField != nil {
+			writeSimilarResultType(&b, node)
+		}
 	}
 
 	// Generate nested mutation input types and relationship connection types per relationship.
@@ -126,6 +129,10 @@ func writeCypherField(b *strings.Builder, cf schema.CypherFieldDefinition) {
 func writeWhereInput(b *strings.Builder, node schema.NodeDefinition) {
 	fmt.Fprintf(b, "input %sWhere {\n", node.Name)
 	for _, f := range node.Fields {
+		// Exclude vector fields from Where input (not filterable)
+		if node.VectorField != nil && f.Name == node.VectorField.Name {
+			continue
+		}
 		baseType := stripNonNull(f.GraphQLType)
 		baseName := baseTypeName(f.GraphQLType)
 
@@ -186,6 +193,10 @@ func writeSortDirection(b *strings.Builder) {
 func writeSortInput(b *strings.Builder, node schema.NodeDefinition) {
 	fmt.Fprintf(b, "input %sSort {\n", node.Name)
 	for _, f := range node.Fields {
+		// Exclude vector fields from Sort input (not sortable)
+		if node.VectorField != nil && f.Name == node.VectorField.Name {
+			continue
+		}
 		fmt.Fprintf(b, "  %s: SortDirection\n", f.Name)
 	}
 	fmt.Fprintln(b, "}")
@@ -285,6 +296,16 @@ func writeConnectionTypes(b *strings.Builder, node schema.NodeDefinition) {
 	fmt.Fprintln(b)
 }
 
+// writeSimilarResultType writes the {Node}SimilarResult type for vector similarity queries.
+// Pattern: type {Node}SimilarResult { score: Float! node: {Node}! }
+func writeSimilarResultType(b *strings.Builder, node schema.NodeDefinition) {
+	fmt.Fprintf(b, "type %sSimilarResult {\n", node.Name)
+	fmt.Fprintln(b, "  score: Float!")
+	fmt.Fprintf(b, "  node: %s!\n", node.Name)
+	fmt.Fprintln(b, "}")
+	fmt.Fprintln(b)
+}
+
 // writeSharedTypes writes DeleteInfo and PageInfo (once).
 func writeSharedTypes(b *strings.Builder) {
 	fmt.Fprintln(b, "type DeleteInfo {")
@@ -302,7 +323,7 @@ func writeSharedTypes(b *strings.Builder) {
 	fmt.Fprintln(b)
 }
 
-// writeQueryType writes the root Query type with list and connection fields for all nodes.
+// writeQueryType writes the root Query type with list, connection, and similar fields for all nodes.
 func writeQueryType(b *strings.Builder, nodes []schema.NodeDefinition) {
 	fmt.Fprintln(b, "type Query {")
 	for _, node := range nodes {
@@ -310,6 +331,9 @@ func writeQueryType(b *strings.Builder, nodes []schema.NodeDefinition) {
 		pc := pluralCapitalized(node.Name)
 		fmt.Fprintf(b, "  %s(where: %sWhere, sort: [%sSort!]): [%s!]!\n", p, node.Name, node.Name, node.Name)
 		fmt.Fprintf(b, "  %sConnection(first: Int, after: String, where: %sWhere, sort: [%sSort!]): %sConnection!\n", p, node.Name, node.Name, pc)
+		if node.VectorField != nil {
+			fmt.Fprintf(b, "  %sSimilar(vector: [Float!]!, first: Int = 10): [%sSimilarResult!]!\n", p, node.Name)
+		}
 	}
 	fmt.Fprintln(b, "}")
 	fmt.Fprintln(b)

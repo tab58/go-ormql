@@ -84,8 +84,14 @@ func (t *Translator) buildPredicate(name string, val *ast.Value, variable string
 			fieldName := strings.TrimSuffix(name, suffix)
 
 			if cypherOp == "IS_NULL" {
-				boolStr := val.Raw
-				isNull, _ := strconv.ParseBool(boolStr)
+				resolved := resolveValue(val, scope.variables)
+				isNull := false
+				switch v := resolved.(type) {
+				case bool:
+					isNull = v
+				case string:
+					isNull, _ = strconv.ParseBool(v)
+				}
 				if isNull {
 					return fmt.Sprintf("%s.%s IS NULL", variable, fieldName)
 				}
@@ -93,47 +99,17 @@ func (t *Translator) buildPredicate(name string, val *ast.Value, variable string
 			}
 
 			if cypherOp == "NOT_IN" {
-				param := scope.add(astValueToGo(val))
+				param := scope.add(resolveValue(val, scope.variables))
 				return fmt.Sprintf("NOT %s.%s IN %s", variable, fieldName, param)
 			}
 
-			param := scope.add(astValueToGo(val))
+			param := scope.add(resolveValue(val, scope.variables))
 			return fmt.Sprintf("%s.%s %s %s", variable, fieldName, cypherOp, param)
 		}
 	}
 
 	// No suffix — equality: field = $param
-	param := scope.add(astValueToGo(val))
+	param := scope.add(resolveValue(val, scope.variables))
 	return fmt.Sprintf("%s.%s = %s", variable, name, param)
 }
 
-// astValueToGo converts an ast.Value to a Go native type for parameterization.
-func astValueToGo(val *ast.Value) any {
-	switch val.Kind {
-	case ast.IntValue:
-		n, _ := strconv.ParseInt(val.Raw, 10, 64)
-		return n
-	case ast.FloatValue:
-		f, _ := strconv.ParseFloat(val.Raw, 64)
-		return f
-	case ast.BooleanValue:
-		b, _ := strconv.ParseBool(val.Raw)
-		return b
-	case ast.StringValue, ast.EnumValue:
-		return val.Raw
-	case ast.ListValue:
-		items := make([]any, 0, len(val.Children))
-		for _, child := range val.Children {
-			items = append(items, astValueToGo(child.Value))
-		}
-		return items
-	case ast.ObjectValue:
-		m := make(map[string]any, len(val.Children))
-		for _, child := range val.Children {
-			m[child.Name] = astValueToGo(child.Value)
-		}
-		return m
-	default:
-		return val.Raw
-	}
-}

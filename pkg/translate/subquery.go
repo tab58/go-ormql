@@ -2,7 +2,6 @@ package translate
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/tab58/gql-orm/pkg/schema"
@@ -52,7 +51,7 @@ func (t *Translator) buildSubquery(field *ast.Field, rel schema.RelationshipDefi
 	// Build ORDER BY from "sort" argument
 	var orderBy string
 	if sortArg := findArgument(field.Arguments, "sort"); sortArg != nil {
-		orderBy = t.buildOrderBy(sortArg.Value, childVar)
+		orderBy = t.buildOrderBy(sortArg.Value, childVar, scope)
 	}
 
 	// Build child projection
@@ -94,7 +93,7 @@ func (t *Translator) buildCypherSubquery(field *ast.Field, cf schema.CypherField
 	for _, arg := range field.Arguments {
 		for _, cfArg := range cf.Arguments {
 			if arg.Name == cfArg.Name {
-				scope.addNamed(arg.Name, astValueToGo(arg.Value))
+				scope.addNamed(arg.Name, resolveValue(arg.Value, scope.variables))
 				break
 			}
 		}
@@ -139,15 +138,7 @@ func (t *Translator) buildConnectionSubquery(field *ast.Field, rel schema.Relati
 	matchPattern := buildRelPattern(fc.variable, relVar, rel.RelType, childVar+":"+targetNode.Labels[0], rel.Direction)
 
 	// Parse pagination params
-	first := defaultConnectionPageSize
-	offset := 0
-	if firstArg := findArgument(field.Arguments, "first"); firstArg != nil {
-		n, _ := strconv.ParseInt(firstArg.Value.Raw, 10, 64)
-		first = int(n)
-	}
-	if afterArg := findArgument(field.Arguments, "after"); afterArg != nil {
-		offset = decodeCursor(afterArg.Value.Raw) + 1
-	}
+	first, offset := parsePagination(field.Arguments, scope)
 
 	// Build WHERE clause
 	var whereClause string
@@ -158,7 +149,7 @@ func (t *Translator) buildConnectionSubquery(field *ast.Field, rel schema.Relati
 	// Build ORDER BY (default to child.id ASC)
 	orderBy := fmt.Sprintf("%s.id ASC", childVar)
 	if sortArg := findArgument(field.Arguments, "sort"); sortArg != nil {
-		if custom := t.buildOrderBy(sortArg.Value, childVar); custom != "" {
+		if custom := t.buildOrderBy(sortArg.Value, childVar, scope); custom != "" {
 			orderBy = custom
 		}
 	}
@@ -222,8 +213,8 @@ func (t *Translator) buildConnectionSubquery(field *ast.Field, rel schema.Relati
 	}
 	inner.WriteString(" }")
 
-	// TotalCount subquery (only when selected)
-	if cs.wantsTotalCount {
+	// TotalCount subquery (needed for totalCount or pageInfo)
+	if cs.wantsTotalCount || cs.wantsPageInfo {
 		inner.WriteString(fmt.Sprintf(" CALL { WITH %s ", fc.variable))
 		inner.WriteString(fmt.Sprintf("MATCH %s", matchPattern))
 		if whereClause != "" {
@@ -231,35 +222,10 @@ func (t *Translator) buildConnectionSubquery(field *ast.Field, rel schema.Relati
 		}
 		inner.WriteString(fmt.Sprintf(" RETURN count(%s) AS %s_totalCount", childVar, alias))
 		inner.WriteString(" }")
-	}
-
-	// pageInfo requires totalCount computation
-	if cs.wantsPageInfo && !cs.wantsTotalCount {
-		inner.WriteString(fmt.Sprintf(" CALL { WITH %s ", fc.variable))
-		inner.WriteString(fmt.Sprintf("MATCH %s", matchPattern))
-		if whereClause != "" {
-			inner.WriteString(fmt.Sprintf(" WHERE %s", whereClause))
-		}
-		inner.WriteString(fmt.Sprintf(" RETURN count(%s) AS %s_totalCount", childVar, alias))
-		inner.WriteString(" }")
-	}
-
-	// Build connection map RETURN (matching translateConnectionField pattern)
-	var returnParts []string
-	returnParts = append(returnParts, fmt.Sprintf("edges: %s_edges", alias))
-	if cs.wantsTotalCount {
-		returnParts = append(returnParts, fmt.Sprintf("totalCount: %s_totalCount", alias))
-	}
-	if cs.wantsPageInfo {
-		pageInfoParts := []string{
-			fmt.Sprintf("hasNextPage: %s_totalCount > (%s + %s)", alias, offsetParam, firstParam),
-			fmt.Sprintf("hasPreviousPage: %s > 0", offsetParam),
-		}
-		returnParts = append(returnParts, fmt.Sprintf("pageInfo: {%s}", strings.Join(pageInfoParts, ", ")))
 	}
 
 	// Wrap everything in an outer CALL block that returns the connection map
-	returnMap := fmt.Sprintf("{%s}", strings.Join(returnParts, ", "))
+	returnMap := buildConnectionReturnMap(alias, offsetParam, firstParam, cs)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("CALL { WITH %s ", fc.variable))

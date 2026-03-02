@@ -51,6 +51,7 @@ func registryWriteNodes(sb *strings.Builder, nodes []schema.NodeDefinition) {
 		sb.WriteString(fmt.Sprintf("\t\t\tLabels: []string{%s},\n", registryQuoteSlice(n.Labels)))
 		registryWriteFields(sb, n.Fields, "\t\t\t")
 		registryWriteCypherFields(sb, n.CypherFields, "\t\t\t")
+		registryWriteVectorField(sb, n.VectorField, "\t\t\t")
 		sb.WriteString("\t\t},\n")
 	}
 	sb.WriteString("\t},\n")
@@ -105,6 +106,20 @@ func registryWriteCypherFields(sb *strings.Builder, fields []schema.CypherFieldD
 		}
 		sb.WriteString(fmt.Sprintf("%s\t},\n", indent))
 	}
+	sb.WriteString(fmt.Sprintf("%s},\n", indent))
+}
+
+// registryWriteVectorField serializes a VectorFieldDefinition pointer.
+// Emits nothing when vf is nil.
+func registryWriteVectorField(sb *strings.Builder, vf *schema.VectorFieldDefinition, indent string) {
+	if vf == nil {
+		return
+	}
+	sb.WriteString(fmt.Sprintf("%sVectorField: &schema.VectorFieldDefinition{\n", indent))
+	sb.WriteString(fmt.Sprintf("%s\tName: %q,\n", indent, vf.Name))
+	sb.WriteString(fmt.Sprintf("%s\tIndexName: %q,\n", indent, vf.IndexName))
+	sb.WriteString(fmt.Sprintf("%s\tDimensions: %d,\n", indent, vf.Dimensions))
+	sb.WriteString(fmt.Sprintf("%s\tSimilarity: %q,\n", indent, vf.Similarity))
 	sb.WriteString(fmt.Sprintf("%s},\n", indent))
 }
 

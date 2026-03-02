@@ -56,5 +56,6 @@ func runGenerate(args []string) error {
 		SchemaFiles: schemaFiles,
 		OutputDir:   *outputFlag,
 		PackageName: *packageFlag,
+		Stderr:      os.Stderr,
 	})
 }

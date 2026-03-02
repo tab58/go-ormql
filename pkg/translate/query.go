@@ -51,6 +51,20 @@ func (t *Translator) translateRootField(field *ast.Field, scope *paramScope) (st
 	fieldName := field.Name
 	alias := "__" + fieldName
 
+	// Check if this is a similar (vector) field
+	if strings.HasSuffix(fieldName, "Similar") {
+		baseName := strings.TrimSuffix(fieldName, "Similar")
+		node, ok := t.findNodeByPluralName(baseName)
+		if !ok {
+			return "", "", fmt.Errorf("unknown type for similar field %q", fieldName)
+		}
+		if node.VectorField == nil {
+			return "", "", fmt.Errorf("node %q has no @vector field for similar query %q", node.Name, fieldName)
+		}
+		fc := fieldContext{node: node, variable: "n", depth: 0}
+		return t.translateSimilarField(field, fc, scope)
+	}
+
 	// Check if this is a connection field
 	if strings.HasSuffix(fieldName, "Connection") {
 		baseName := strings.TrimSuffix(fieldName, "Connection")
@@ -79,7 +93,7 @@ func (t *Translator) translateRootField(field *ast.Field, scope *paramScope) (st
 	// Build ORDER BY from "sort" argument
 	var orderBy string
 	if sortArg := findArgument(field.Arguments, "sort"); sortArg != nil {
-		orderBy = t.buildOrderBy(sortArg.Value, fc.variable)
+		orderBy = t.buildOrderBy(sortArg.Value, fc.variable, scope)
 	}
 
 	// Build projection
@@ -117,6 +131,88 @@ func (t *Translator) translateRootField(field *ast.Field, scope *paramScope) (st
 	return sb.String(), alias, nil
 }
 
+// translateSimilarField translates a vector similarity query field.
+// Produces: CALL { CALL db.index.vector.queryNodes($p0, $p1, $p2) YIELD node AS n, score
+//
+//	RETURN collect({score: score, node: n { .title, ... }}) AS __alias }
+func (t *Translator) translateSimilarField(field *ast.Field, fc fieldContext, scope *paramScope) (string, string, error) {
+	alias := "__" + field.Name
+	vf := fc.node.VectorField
+
+	// Resolve index name (string constant), first (int, default 10), vector ([]float64)
+	indexParam := scope.add(vf.IndexName)
+
+	first := defaultConnectionPageSize
+	if firstArg := findArgument(field.Arguments, "first"); firstArg != nil {
+		resolved := resolveValue(firstArg.Value, scope.variables)
+		if n := toInt64(resolved); n > 0 {
+			first = int(n)
+		}
+	}
+	firstParam := scope.add(first)
+
+	var vectorVal any
+	if vectorArg := findArgument(field.Arguments, "vector"); vectorArg != nil {
+		vectorVal = resolveValue(vectorArg.Value, scope.variables)
+	}
+	// Convert []any to []float64 if needed (AST ListValue resolves to []any of float64 literals)
+	vectorVal = normalizeVector(vectorVal)
+	vectorParam := scope.add(vectorVal)
+
+	// Build node projection from "node" sub-selection
+	var projParts []string
+	projParts = append(projParts, "score: score")
+
+	for _, sel := range field.SelectionSet {
+		f, ok := sel.(*ast.Field)
+		if !ok {
+			continue
+		}
+		if f.Name == "node" && len(f.SelectionSet) > 0 {
+			proj, _, err := t.buildProjection(f.SelectionSet, fc, scope)
+			if err != nil {
+				return "", "", fmt.Errorf("similar node projection: %w", err)
+			}
+			projParts = append(projParts, fmt.Sprintf("node: %s", proj))
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("CALL { ")
+	sb.WriteString(fmt.Sprintf("CALL db.index.vector.queryNodes(%s, %s, %s) YIELD node AS %s, score",
+		indexParam, firstParam, vectorParam, fc.variable))
+	sb.WriteString(fmt.Sprintf(" RETURN collect({%s}) AS %s", strings.Join(projParts, ", "), alias))
+	sb.WriteString(" }")
+
+	return sb.String(), alias, nil
+}
+
+// normalizeVector converts a resolved vector value to []float64.
+// AST ListValue resolves to []any containing float64 values; this converts to []float64.
+func normalizeVector(v any) any {
+	if v == nil {
+		return v
+	}
+	// Already []float64 (from variables map)
+	if _, ok := v.([]float64); ok {
+		return v
+	}
+	// Convert []any → []float64
+	if items, ok := v.([]any); ok {
+		result := make([]float64, 0, len(items))
+		for _, item := range items {
+			switch n := item.(type) {
+			case float64:
+				result = append(result, n)
+			case int64:
+				result = append(result, float64(n))
+			}
+		}
+		return result
+	}
+	return v
+}
+
 // findNodeByPluralName looks up a node definition by its plural field name.
 // e.g., "movies" → Movie node, "actors" → Actor node.
 func (t *Translator) findNodeByPluralName(pluralName string) (schema.NodeDefinition, bool) {
@@ -140,15 +236,7 @@ func (t *Translator) translateConnectionField(field *ast.Field, fc fieldContext,
 	node := fc.node
 
 	// Parse pagination params
-	first := defaultConnectionPageSize
-	offset := 0
-	if firstArg := findArgument(field.Arguments, "first"); firstArg != nil {
-		n, _ := strconv.ParseInt(firstArg.Value.Raw, 10, 64)
-		first = int(n)
-	}
-	if afterArg := findArgument(field.Arguments, "after"); afterArg != nil {
-		offset = decodeCursor(afterArg.Value.Raw) + 1
-	}
+	first, offset := parsePagination(field.Arguments, scope)
 
 	// Build WHERE clause
 	var whereClause string
@@ -159,7 +247,7 @@ func (t *Translator) translateConnectionField(field *ast.Field, fc fieldContext,
 	// Build ORDER BY (default to n.id ASC for stable cursor pagination)
 	orderBy := fmt.Sprintf("%s.id ASC", fc.variable)
 	if sortArg := findArgument(field.Arguments, "sort"); sortArg != nil {
-		if custom := t.buildOrderBy(sortArg.Value, fc.variable); custom != "" {
+		if custom := t.buildOrderBy(sortArg.Value, fc.variable, scope); custom != "" {
 			orderBy = custom
 		}
 	}
@@ -205,8 +293,8 @@ func (t *Translator) translateConnectionField(field *ast.Field, fc fieldContext,
 	}
 	sb.WriteString(" }")
 
-	// TotalCount subquery (only when selected)
-	if cs.wantsTotalCount {
+	// TotalCount subquery (needed for totalCount or pageInfo)
+	if cs.wantsTotalCount || cs.wantsPageInfo {
 		sb.WriteString(" CALL { ")
 		sb.WriteString(fmt.Sprintf("MATCH (%s:%s)", fc.variable, node.Labels[0]))
 		if whereClause != "" {
@@ -214,35 +302,10 @@ func (t *Translator) translateConnectionField(field *ast.Field, fc fieldContext,
 		}
 		sb.WriteString(fmt.Sprintf(" RETURN count(%s) AS %s_totalCount", fc.variable, alias))
 		sb.WriteString(" }")
-	}
-
-	// pageInfo requires totalCount computation
-	if cs.wantsPageInfo && !cs.wantsTotalCount {
-		sb.WriteString(" CALL { ")
-		sb.WriteString(fmt.Sprintf("MATCH (%s:%s)", fc.variable, node.Labels[0]))
-		if whereClause != "" {
-			sb.WriteString(fmt.Sprintf(" WHERE %s", whereClause))
-		}
-		sb.WriteString(fmt.Sprintf(" RETURN count(%s) AS %s_totalCount", fc.variable, alias))
-		sb.WriteString(" }")
-	}
-
-	// Build return map parts
-	var returnParts []string
-	returnParts = append(returnParts, fmt.Sprintf("edges: %s_edges", alias))
-	if cs.wantsTotalCount {
-		returnParts = append(returnParts, fmt.Sprintf("totalCount: %s_totalCount", alias))
-	}
-	if cs.wantsPageInfo {
-		pageInfoParts := []string{
-			fmt.Sprintf("hasNextPage: %s_totalCount > (%s + %s)", alias, offsetParam, firstParam),
-			fmt.Sprintf("hasPreviousPage: %s > 0", offsetParam),
-		}
-		returnParts = append(returnParts, fmt.Sprintf("pageInfo: {%s}", strings.Join(pageInfoParts, ", ")))
 	}
 
 	// Wrap everything in a final CALL block that returns the connection map
-	returnMap := fmt.Sprintf("{%s}", strings.Join(returnParts, ", "))
+	returnMap := buildConnectionReturnMap(alias, offsetParam, firstParam, cs)
 
 	var result strings.Builder
 	result.WriteString(sb.String())
@@ -279,6 +342,44 @@ func detectConnectionSelections(selSet ast.SelectionSet) connectionSelections {
 		}
 	}
 	return cs
+}
+
+// buildConnectionReturnMap builds the Cypher map expression for a connection field's RETURN clause.
+// Constructs: {edges: alias_edges, totalCount: alias_totalCount, pageInfo: {...}}
+// based on which parts of the connection are selected.
+func buildConnectionReturnMap(alias, offsetParam, firstParam string, cs connectionSelections) string {
+	var returnParts []string
+	returnParts = append(returnParts, fmt.Sprintf("edges: %s_edges", alias))
+	if cs.wantsTotalCount {
+		returnParts = append(returnParts, fmt.Sprintf("totalCount: %s_totalCount", alias))
+	}
+	if cs.wantsPageInfo {
+		pageInfoParts := []string{
+			fmt.Sprintf("hasNextPage: %s_totalCount > (%s + %s)", alias, offsetParam, firstParam),
+			fmt.Sprintf("hasPreviousPage: %s > 0", offsetParam),
+		}
+		returnParts = append(returnParts, fmt.Sprintf("pageInfo: {%s}", strings.Join(pageInfoParts, ", ")))
+	}
+	return fmt.Sprintf("{%s}", strings.Join(returnParts, ", "))
+}
+
+// parsePagination extracts "first" and "after" pagination arguments from a field.
+// Returns the page size (defaulting to defaultConnectionPageSize) and the zero-based offset.
+func parsePagination(args ast.ArgumentList, scope *paramScope) (first int, offset int) {
+	first = defaultConnectionPageSize
+	if firstArg := findArgument(args, "first"); firstArg != nil {
+		resolved := resolveValue(firstArg.Value, scope.variables)
+		if n := toInt64(resolved); n > 0 {
+			first = int(n)
+		}
+	}
+	if afterArg := findArgument(args, "after"); afterArg != nil {
+		resolved := resolveValue(afterArg.Value, scope.variables)
+		if s, ok := resolved.(string); ok {
+			offset = decodeCursor(s) + 1
+		}
+	}
+	return first, offset
 }
 
 // decodeCursor decodes a base64 cursor to an offset integer.
@@ -332,7 +433,7 @@ func buildFieldAssignments(data *ast.Value, variable string, scope *paramScope) 
 	}
 	parts := make([]string, 0, len(data.Children))
 	for _, child := range data.Children {
-		param := scope.add(astValueToGo(child.Value))
+		param := scope.add(resolveValue(child.Value, scope.variables))
 		parts = append(parts, fmt.Sprintf("%s.%s = %s", variable, child.Name, param))
 	}
 	return parts

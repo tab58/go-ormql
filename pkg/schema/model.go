@@ -42,12 +42,22 @@ type CypherFieldDefinition struct {
 	Arguments   []ArgumentDefinition
 }
 
+// VectorFieldDefinition represents a field annotated with @vector(indexName, dimensions, similarity)
+// on a @node type. The field must be of GraphQL type [Float!]!.
+type VectorFieldDefinition struct {
+	Name       string
+	IndexName  string
+	Dimensions int
+	Similarity string
+}
+
 // NodeDefinition represents a GraphQL type annotated with @node.
 type NodeDefinition struct {
 	Name         string
 	Labels       []string
 	Fields       []FieldDefinition
 	CypherFields []CypherFieldDefinition
+	VectorField  *VectorFieldDefinition
 }
 
 // PropertiesDefinition represents a type annotated with @relationshipProperties.
@@ -92,15 +102,31 @@ func (m GraphModel) NodeByName(name string) (NodeDefinition, bool) {
 			copy(fields, n.Fields)
 			cypherFields := make([]CypherFieldDefinition, len(n.CypherFields))
 			copy(cypherFields, n.CypherFields)
+			var vf *VectorFieldDefinition
+			if n.VectorField != nil {
+				vfCopy := *n.VectorField
+				vf = &vfCopy
+			}
 			return NodeDefinition{
 				Name:         n.Name,
 				Labels:       labels,
 				Fields:       fields,
 				CypherFields: cypherFields,
+				VectorField:  vf,
 			}, true
 		}
 	}
 	return NodeDefinition{}, false
+}
+
+// HasVectorField returns true if any node in the model has a @vector field.
+func (m GraphModel) HasVectorField() bool {
+	for _, n := range m.Nodes {
+		if n.VectorField != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // RelationshipsForNode returns all relationships where FromNode or ToNode matches the given name.

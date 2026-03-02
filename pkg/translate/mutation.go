@@ -85,7 +85,7 @@ func (t *Translator) translateCreateField(field *ast.Field, scope *paramScope) (
 	}
 
 	// Convert input to Go value and register as parameter
-	inputParam := scope.add(astValueToGo(inputArg.Value))
+	inputParam := scope.add(resolveValue(inputArg.Value, scope.variables))
 
 	// Get the relationships for this node for nested ops
 	rels := t.model.RelationshipsForNode(node.Name)
@@ -188,7 +188,7 @@ func (t *Translator) translateUpdateField(field *ast.Field, scope *paramScope) (
 				}
 			}
 			if !isRelField {
-				param := scope.add(astValueToGo(child.Value))
+				param := scope.add(resolveValue(child.Value, scope.variables))
 				setParts = append(setParts, fmt.Sprintf("n.%s = %s", child.Name, param))
 			}
 		}

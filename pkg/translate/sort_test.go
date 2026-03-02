@@ -31,7 +31,7 @@ func TestBuildOrderBy_SingleField(t *testing.T) {
 	tr := New(testModel())
 	sort := makeSortValue(map[string]string{"released": "DESC"})
 
-	result := tr.buildOrderBy(sort, "n")
+	result := tr.buildOrderBy(sort, "n", nil)
 	if result == "" {
 		t.Fatal("expected non-empty ORDER BY clause, got empty")
 	}
@@ -51,7 +51,7 @@ func TestBuildOrderBy_MultipleFields(t *testing.T) {
 		map[string]string{"title": "ASC"},
 	)
 
-	result := tr.buildOrderBy(sort, "n")
+	result := tr.buildOrderBy(sort, "n", nil)
 	if !strings.Contains(result, "n.released") {
 		t.Errorf("expected n.released in ORDER BY, got %q", result)
 	}
@@ -65,7 +65,7 @@ func TestBuildOrderBy_ASC(t *testing.T) {
 	tr := New(testModel())
 	sort := makeSortValue(map[string]string{"title": "ASC"})
 
-	result := tr.buildOrderBy(sort, "n")
+	result := tr.buildOrderBy(sort, "n", nil)
 	if !strings.Contains(result, "ASC") {
 		t.Errorf("expected ASC in ORDER BY, got %q", result)
 	}
@@ -75,7 +75,7 @@ func TestBuildOrderBy_ASC(t *testing.T) {
 func TestBuildOrderBy_NilSort(t *testing.T) {
 	tr := New(testModel())
 
-	result := tr.buildOrderBy(nil, "n")
+	result := tr.buildOrderBy(nil, "n", nil)
 	if result != "" {
 		t.Errorf("expected empty ORDER BY for nil sort, got %q", result)
 	}
@@ -86,7 +86,7 @@ func TestBuildOrderBy_EmptyList(t *testing.T) {
 	tr := New(testModel())
 	sort := &ast.Value{Kind: ast.ListValue, Children: nil}
 
-	result := tr.buildOrderBy(sort, "n")
+	result := tr.buildOrderBy(sort, "n", nil)
 	if result != "" {
 		t.Errorf("expected empty ORDER BY for empty list, got %q", result)
 	}
@@ -97,8 +97,30 @@ func TestBuildOrderBy_UsesVariable(t *testing.T) {
 	tr := New(testModel())
 	sort := makeSortValue(map[string]string{"title": "ASC"})
 
-	result := tr.buildOrderBy(sort, "a")
+	result := tr.buildOrderBy(sort, "a", nil)
 	if !strings.Contains(result, "a.title") {
 		t.Errorf("expected a.title in ORDER BY, got %q", result)
+	}
+}
+
+// Test: buildOrderByFromGo with multi-key sort object produces deterministic ordering.
+// Expected: {"released": "DESC", "title": "ASC"} → "n.released DESC, n.title ASC"
+// (alphabetical key order: released < title)
+func TestBuildOrderByFromGo_MultiKeyDeterministic(t *testing.T) {
+	resolved := []any{map[string]any{"released": "DESC", "title": "ASC"}}
+
+	// Run multiple times to verify determinism
+	first := buildOrderByFromGo(resolved, "n")
+	for i := 0; i < 20; i++ {
+		result := buildOrderByFromGo(resolved, "n")
+		if result != first {
+			t.Errorf("non-deterministic ordering on iteration %d: got %q, first was %q", i, result, first)
+		}
+	}
+
+	// Verify alphabetical ordering: released < title
+	expected := "n.released DESC, n.title ASC"
+	if first != expected {
+		t.Errorf("expected %q, got %q", expected, first)
 	}
 }

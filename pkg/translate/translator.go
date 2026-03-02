@@ -44,6 +44,7 @@ func (t *Translator) Translate(
 	}
 
 	scope := newParamScope()
+	scope.variables = variables
 
 	var cypherStr string
 	var err error
