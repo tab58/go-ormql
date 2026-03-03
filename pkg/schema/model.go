@@ -88,6 +88,7 @@ type GraphModel struct {
 	Nodes         []NodeDefinition
 	Relationships []RelationshipDefinition
 	Enums         []EnumDefinition
+	CustomScalars []string // custom scalar names from the schema (e.g. "DateTime", "JSON")
 }
 
 // NodeByName looks up a node by its GraphQL type name.

@@ -447,6 +447,128 @@ func TestParseSchema_FilePaths(t *testing.T) {
 	}
 }
 
+// TestParseSchemaString_CustomScalars verifies that custom scalar declarations
+// are collected into GraphModel.CustomScalars, sorted alphabetically.
+func TestParseSchemaString_CustomScalars(t *testing.T) {
+	sdl := `
+		scalar DateTime
+		scalar JSON
+		type Movie @node {
+			id: ID!
+			title: String!
+			createdAt: DateTime!
+			metadata: JSON
+		}
+	`
+
+	model, err := ParseSchemaString(sdl)
+	if err != nil {
+		t.Fatalf("ParseSchemaString returned error: %v", err)
+	}
+	if len(model.CustomScalars) != 2 {
+		t.Fatalf("len(CustomScalars) = %d, want 2", len(model.CustomScalars))
+	}
+	// Should be sorted alphabetically.
+	if model.CustomScalars[0] != "DateTime" {
+		t.Errorf("CustomScalars[0] = %q, want %q", model.CustomScalars[0], "DateTime")
+	}
+	if model.CustomScalars[1] != "JSON" {
+		t.Errorf("CustomScalars[1] = %q, want %q", model.CustomScalars[1], "JSON")
+	}
+}
+
+// TestParseSchemaString_NoCustomScalars verifies that schemas without custom
+// scalars produce an empty CustomScalars slice.
+func TestParseSchemaString_NoCustomScalars(t *testing.T) {
+	sdl := `
+		type Movie @node {
+			id: ID!
+			title: String!
+		}
+	`
+
+	model, err := ParseSchemaString(sdl)
+	if err != nil {
+		t.Fatalf("ParseSchemaString returned error: %v", err)
+	}
+	if len(model.CustomScalars) != 0 {
+		t.Errorf("len(CustomScalars) = %d, want 0", len(model.CustomScalars))
+	}
+}
+
+// TestParseSchemaString_CustomScalarFieldTypes verifies that fields using custom
+// scalars get the correct Go and Cypher type mappings.
+func TestParseSchemaString_CustomScalarFieldTypes(t *testing.T) {
+	sdl := `
+		scalar DateTime
+		type Event @node {
+			id: ID!
+			startTime: DateTime!
+			endTime: DateTime
+		}
+	`
+
+	model, err := ParseSchemaString(sdl)
+	if err != nil {
+		t.Fatalf("ParseSchemaString returned error: %v", err)
+	}
+	if len(model.Nodes) == 0 {
+		t.Fatal("len(Nodes) = 0, want 1")
+	}
+
+	fields := model.Nodes[0].Fields
+	expected := []struct {
+		name       string
+		goType     string
+		cypherType string
+		nullable   bool
+	}{
+		{"id", "string", "STRING", false},
+		{"startTime", "time.Time", "LOCAL DATETIME", false},
+		{"endTime", "*time.Time", "LOCAL DATETIME", true},
+	}
+
+	if len(fields) != len(expected) {
+		t.Fatalf("len(fields) = %d, want %d", len(fields), len(expected))
+	}
+	for i, exp := range expected {
+		f := fields[i]
+		if f.Name != exp.name {
+			t.Errorf("fields[%d].Name = %q, want %q", i, f.Name, exp.name)
+		}
+		if f.GoType != exp.goType {
+			t.Errorf("fields[%d].GoType = %q, want %q", i, f.GoType, exp.goType)
+		}
+		if f.CypherType != exp.cypherType {
+			t.Errorf("fields[%d].CypherType = %q, want %q", i, f.CypherType, exp.cypherType)
+		}
+		if f.Nullable != exp.nullable {
+			t.Errorf("fields[%d].Nullable = %v, want %v", i, f.Nullable, exp.nullable)
+		}
+	}
+}
+
+// TestParseSchemaString_UnknownCustomScalar verifies that unknown custom scalars
+// (not in the known map) are still collected and fields using them fall through
+// to object type inference.
+func TestParseSchemaString_UnknownCustomScalar(t *testing.T) {
+	sdl := `
+		scalar Money
+		type Product @node {
+			id: ID!
+			price: Money!
+		}
+	`
+
+	model, err := ParseSchemaString(sdl)
+	if err != nil {
+		t.Fatalf("ParseSchemaString returned error: %v", err)
+	}
+	if len(model.CustomScalars) != 1 || model.CustomScalars[0] != "Money" {
+		t.Fatalf("CustomScalars = %v, want [Money]", model.CustomScalars)
+	}
+}
+
 // TestParseSchema_FileNotFound verifies that ParseSchema returns an error for nonexistent files.
 func TestParseSchema_FileNotFound(t *testing.T) {
 	_, err := ParseSchema([]string{"/nonexistent/path/schema.graphql"})

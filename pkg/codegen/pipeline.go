@@ -66,6 +66,19 @@ func Generate(cfg Config) error {
 		fmt.Fprintln(cfg.Stderr, vectorWarningForTarget(target))
 	}
 
+	// 1b. Generate scalars file if custom scalars are present.
+	if len(model.CustomScalars) > 0 {
+		scalarsSrc, err := GenerateScalars(model.CustomScalars, packageName)
+		if err != nil {
+			return fmt.Errorf("scalars generation failed: %w", err)
+		}
+		if scalarsSrc != nil {
+			if err := writeGeneratedFile(filepath.Join(cfg.OutputDir, "scalars_gen.go"), scalarsSrc); err != nil {
+				return fmt.Errorf("failed to write scalars: %w", err)
+			}
+		}
+	}
+
 	// 2. Augment schema and write to output.
 	augmented, err := AugmentSchema(model)
 	if err != nil {

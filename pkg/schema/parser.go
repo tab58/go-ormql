@@ -3,6 +3,7 @@ package schema
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/vektah/gqlparser/v2"
@@ -162,11 +163,28 @@ func parseFromSources(sources []*ast.Source) (GraphModel, error) {
 		})
 	}
 
+	// Collect custom scalar declarations (non-built-in scalars).
+	customScalars := collectCustomScalars(schema)
+
 	return GraphModel{
 		Nodes:         nodes,
 		Relationships: relationships,
 		Enums:         enums,
+		CustomScalars: customScalars,
 	}, nil
+}
+
+// collectCustomScalars extracts custom scalar type names from the parsed schema,
+// excluding built-in scalars (String, Int, Float, Boolean, ID).
+func collectCustomScalars(s *ast.Schema) []string {
+	var scalars []string
+	for _, t := range s.Types {
+		if t.Kind == ast.Scalar && !t.BuiltIn {
+			scalars = append(scalars, t.Name)
+		}
+	}
+	sort.Strings(scalars)
+	return scalars
 }
 
 // buildSchemaDocument reconstructs an ast.SchemaDocument from a parsed schema

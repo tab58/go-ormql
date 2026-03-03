@@ -32,6 +32,16 @@ func TestGraphQLToGoType(t *testing.T) {
 		{"nullable enum", "Status", true, "*string"},
 		{"non-nullable enum", "Status!", true, "string"},
 
+		// Known custom scalars
+		{"nullable DateTime", "DateTime", false, "*time.Time"},
+		{"non-nullable DateTime", "DateTime!", false, "time.Time"},
+		{"list of DateTime", "[DateTime!]!", false, "[]time.Time"},
+		{"nullable Date", "Date", false, "*time.Time"},
+		{"non-nullable BigInt", "BigInt!", false, "int64"},
+		{"nullable BigInt", "BigInt", false, "*int64"},
+		{"nullable JSON", "JSON", false, "*map[string]any"},
+		{"non-nullable JSON", "JSON!", false, "map[string]any"},
+
 		// Object types → pointer types
 		{"object type", "Unknown", false, "*Unknown"},
 		{"non-nullable object", "Movie!", false, "*Movie"},
@@ -77,6 +87,15 @@ func TestGraphQLToCypherType(t *testing.T) {
 		// Enum types → STRING
 		{"nullable enum", "Status", true, "STRING"},
 		{"non-nullable enum", "Status!", true, "STRING"},
+
+		// Known custom scalars → Cypher types
+		{"nullable DateTime", "DateTime", false, "LOCAL DATETIME"},
+		{"non-nullable DateTime", "DateTime!", false, "LOCAL DATETIME"},
+		{"nullable Date", "Date", false, "DATE"},
+		{"non-nullable Time", "Time!", false, "LOCAL TIME"},
+		{"nullable JSON", "JSON", false, "STRING"},
+		{"non-nullable BigInt", "BigInt!", false, "INTEGER"},
+		{"list of DateTime", "[DateTime!]!", false, "LIST<LOCAL DATETIME>"},
 
 		// Unknown type → empty string
 		{"unknown type", "Unknown", false, ""},

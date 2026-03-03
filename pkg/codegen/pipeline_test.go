@@ -522,3 +522,99 @@ func TestGenerate_V2_GraphModelGenContainsVar(t *testing.T) {
 		t.Error("graphmodel_gen.go should contain 'var GraphModel' declaration")
 	}
 }
+
+// --- Custom scalar pipeline tests ---
+
+// writeSampleSchemaWithScalars writes a schema that includes custom scalar declarations.
+func writeSampleSchemaWithScalars(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.graphql")
+	sdl := `scalar DateTime
+scalar Money
+
+type Event @node {
+	id: ID!
+	title: String!
+	startTime: DateTime!
+	cost: Money
+}
+`
+	if err := os.WriteFile(schemaPath, []byte(sdl), 0644); err != nil {
+		t.Fatalf("failed to write sample schema: %v", err)
+	}
+	return schemaPath
+}
+
+// TestGenerate_WritesScalarsGen verifies that Generate writes scalars_gen.go
+// when custom scalars are present in the schema.
+func TestGenerate_WritesScalarsGen(t *testing.T) {
+	schemaPath := writeSampleSchemaWithScalars(t)
+	outputDir := t.TempDir()
+
+	cfg := Config{
+		SchemaFiles: []string{schemaPath},
+		OutputDir:   outputDir,
+		PackageName: "generated",
+	}
+
+	err := Generate(cfg)
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	scalarsPath := filepath.Join(outputDir, "scalars_gen.go")
+	if _, err := os.Stat(scalarsPath); os.IsNotExist(err) {
+		t.Fatal("Generate did not write scalars_gen.go when custom scalars are present")
+	}
+}
+
+// TestGenerate_ScalarsGenContent verifies the content of the generated scalars file.
+func TestGenerate_ScalarsGenContent(t *testing.T) {
+	schemaPath := writeSampleSchemaWithScalars(t)
+	outputDir := t.TempDir()
+
+	cfg := Config{
+		SchemaFiles: []string{schemaPath},
+		OutputDir:   outputDir,
+		PackageName: "generated",
+	}
+
+	if err := Generate(cfg); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "scalars_gen.go"))
+	if err != nil {
+		t.Fatalf("failed to read scalars_gen.go: %v", err)
+	}
+	src := string(content)
+	if !strings.Contains(src, "type DateTime = time.Time") {
+		t.Error("scalars_gen.go missing 'type DateTime = time.Time'")
+	}
+	if !strings.Contains(src, "type Money = any") {
+		t.Error("scalars_gen.go missing 'type Money = any'")
+	}
+}
+
+// TestGenerate_NoScalarsGenWithoutCustomScalars verifies that scalars_gen.go
+// is NOT produced when the schema has no custom scalar declarations.
+func TestGenerate_NoScalarsGenWithoutCustomScalars(t *testing.T) {
+	schemaPath := writeSampleSchema(t) // standard schema without custom scalars
+	outputDir := t.TempDir()
+
+	cfg := Config{
+		SchemaFiles: []string{schemaPath},
+		OutputDir:   outputDir,
+		PackageName: "generated",
+	}
+
+	if err := Generate(cfg); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	scalarsPath := filepath.Join(outputDir, "scalars_gen.go")
+	if _, err := os.Stat(scalarsPath); err == nil {
+		t.Fatal("scalars_gen.go should NOT exist when no custom scalars are declared")
+	}
+}
