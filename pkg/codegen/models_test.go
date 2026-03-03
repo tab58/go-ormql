@@ -413,3 +413,117 @@ func TestGenerateModels_EmptyPackageName_ReturnsError(t *testing.T) {
 		t.Error("GenerateModels with empty packageName should return error")
 	}
 }
+
+// --- Custom scalar type alias tests ---
+
+// dateTimeModel returns a GraphModel with a node that uses a DateTime custom scalar.
+func dateTimeModel() schema.GraphModel {
+	return schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{
+				Name:   "Event",
+				Labels: []string{"Event"},
+				Fields: []schema.FieldDefinition{
+					{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+					{Name: "title", GraphQLType: "String!", GoType: "string", CypherType: "STRING"},
+					{Name: "startTime", GraphQLType: "DateTime!", GoType: "time.Time", CypherType: "LOCAL DATETIME"},
+					{Name: "endTime", GraphQLType: "DateTime", GoType: "*time.Time", CypherType: "LOCAL DATETIME", Nullable: true},
+				},
+			},
+		},
+		CustomScalars: []string{"DateTime"},
+	}
+}
+
+// Test: GenerateModels uses scalar alias (DateTime) instead of raw Go type (time.Time)
+// when the schema declares a custom scalar.
+// Expected: output contains "DateTime" for fields, not "time.Time".
+func TestGenerateModels_CustomScalarUsesAlias(t *testing.T) {
+	out, err := GenerateModels(dateTimeModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+
+	// Non-nullable DateTime! field should use "DateTime" type
+	if !strings.Contains(src, "DateTime") {
+		t.Error("expected DateTime alias in output, got none")
+	}
+	// Should NOT use time.Time directly (the alias is in scalars_gen.go)
+	if strings.Contains(src, "time.Time") {
+		t.Errorf("expected scalar alias DateTime instead of time.Time in:\n%s", src)
+	}
+}
+
+// Test: GenerateModels with custom scalar does not require "time" import.
+// Expected: output does NOT contain import "time".
+func TestGenerateModels_CustomScalarNoTimeImport(t *testing.T) {
+	out, err := GenerateModels(dateTimeModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if strings.Contains(src, `"time"`) {
+		t.Errorf("models should not import \"time\" when using scalar aliases:\n%s", src)
+	}
+}
+
+// Test: GenerateModels with custom scalar still passes gofmt.
+func TestGenerateModels_CustomScalar_PassesGofmt(t *testing.T) {
+	out, err := GenerateModels(dateTimeModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, fmtErr := format.Source(out)
+	if fmtErr != nil {
+		t.Errorf("output with custom scalar does not pass gofmt: %v\nOutput:\n%s", fmtErr, string(out))
+	}
+}
+
+// Test: Nullable DateTime field uses *DateTime pointer type.
+func TestGenerateModels_NullableCustomScalar(t *testing.T) {
+	out, err := GenerateModels(dateTimeModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "*DateTime") {
+		t.Errorf("expected *DateTime for nullable field, got:\n%s", src)
+	}
+}
+
+// Test: modelsResolveGoType returns scalar alias for custom scalars.
+func TestModelsResolveGoType(t *testing.T) {
+	customScalars := map[string]bool{"DateTime": true, "Money": true}
+
+	tests := []struct {
+		name        string
+		graphqlType string
+		goType      string
+		want        string
+	}{
+		{"non-nullable scalar", "DateTime!", "time.Time", "DateTime"},
+		{"nullable scalar", "DateTime", "*time.Time", "*DateTime"},
+		{"list scalar", "[DateTime!]!", "[]time.Time", "[]DateTime"},
+		{"unknown scalar", "Money!", "any", "Money"},
+		{"non-scalar type", "String!", "string", "string"},
+		{"non-scalar nullable", "Int", "*int", "*int"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := modelsResolveGoType(tt.graphqlType, tt.goType, customScalars)
+			if got != tt.want {
+				t.Errorf("modelsResolveGoType(%q, %q) = %q, want %q", tt.graphqlType, tt.goType, got, tt.want)
+			}
+		})
+	}
+}
+
+// Test: modelsResolveGoType with nil customScalars returns original GoType.
+func TestModelsResolveGoType_NilScalars(t *testing.T) {
+	got := modelsResolveGoType("DateTime!", "time.Time", nil)
+	if got != "time.Time" {
+		t.Errorf("with nil customScalars, expected original GoType, got %q", got)
+	}
+}

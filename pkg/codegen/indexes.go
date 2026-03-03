@@ -13,8 +13,9 @@ import (
 const vectorIndexDDLFormat = "CREATE VECTOR INDEX %s IF NOT EXISTS FOR (n:%s) ON (n.%s) OPTIONS {indexConfig: {`vector.dimensions`: %d, `vector.similarity_function`: '%s'}}"
 
 // falkorDBVectorIndexDDLFormat is the FalkorDB Cypher DDL template for creating a vector index.
+// FalkorDB does not support named vector indexes; the index is identified by label and property.
 // Arguments: label, fieldName, dimensions, similarity.
-const falkorDBVectorIndexDDLFormat = "CREATE VECTOR INDEX FOR (n:%s) ON (n.%s) OPTIONS {dimension: %d, similarityFunction: '%s'}"
+const falkorDBVectorIndexDDLFormat = "CREATE VECTOR INDEX IF NOT EXISTS FOR (n:%s) ON (n.%s) OPTIONS {dimension: %d, similarityFunction: '%s'}"
 
 // GenerateIndexes produces Go source code containing a CreateIndexes function
 // that creates vector indexes using driver.ExecuteWrite.
@@ -57,7 +58,9 @@ func GenerateIndexes(model schema.GraphModel, packageName string, target Target)
 
 	// FalkorDB: generate VectorIndexes var for driver-level vector query rewrite
 	if target == TargetFalkorDB {
-		sb.WriteString("// VectorIndexes maps index names to their label/property for FalkorDB vector query rewrite.\n")
+		sb.WriteString("// VectorIndexes maps logical index names to their label/property for FalkorDB vector query rewrite.\n")
+		sb.WriteString("// FalkorDB does not support named vector indexes; these keys are logical identifiers\n")
+		sb.WriteString("// used by the driver for query rewriting, not actual database index names.\n")
 		sb.WriteString("var VectorIndexes = map[string]driver.VectorIndex{\n")
 		for _, idx := range indexes {
 			sb.WriteString(fmt.Sprintf("\t%q: {Label: %q, Property: %q},\n", idx.indexName, idx.label, idx.fieldName))

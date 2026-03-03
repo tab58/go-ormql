@@ -63,9 +63,9 @@ func TestE2EFalkorDB_IndexesGenFalkorDBDDL(t *testing.T) {
 	}
 	src := string(content)
 
-	// FalkorDB DDL should contain FalkorDB-specific syntax
-	if !strings.Contains(src, "CREATE VECTOR INDEX FOR") {
-		t.Error("FalkorDB indexes_gen.go missing 'CREATE VECTOR INDEX FOR'")
+	// FalkorDB DDL should contain FalkorDB-specific syntax with IF NOT EXISTS
+	if !strings.Contains(src, "CREATE VECTOR INDEX IF NOT EXISTS FOR") {
+		t.Error("FalkorDB indexes_gen.go missing 'CREATE VECTOR INDEX IF NOT EXISTS FOR'")
 	}
 	if !strings.Contains(src, "dimension") {
 		t.Error("FalkorDB indexes_gen.go missing 'dimension' option key")

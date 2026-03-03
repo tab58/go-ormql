@@ -109,8 +109,8 @@ func TestGenerateIndexes_FalkorDBDDL(t *testing.T) {
 		t.Fatal("output is nil")
 	}
 	src := string(out)
-	if !strings.Contains(src, "CREATE VECTOR INDEX FOR") {
-		t.Error("FalkorDB DDL missing 'CREATE VECTOR INDEX FOR'")
+	if !strings.Contains(src, "CREATE VECTOR INDEX IF NOT EXISTS FOR") {
+		t.Error("FalkorDB DDL missing 'CREATE VECTOR INDEX IF NOT EXISTS FOR'")
 	}
 	if !strings.Contains(src, "dimension") {
 		t.Error("FalkorDB DDL missing 'dimension' option key")

@@ -14,9 +14,20 @@ import (
 // input types (CreateInput, UpdateInput, Where, Sort), nested mutation input types,
 // connection types, response types, enum types, and relationship properties types.
 // All types have JSON tags matching GraphQL field names.
+//
+// When the schema declares custom scalars (e.g., DateTime), generated struct fields
+// use the scalar type alias (defined in scalars_gen.go) instead of the raw Go type.
+// This eliminates the need for models_gen.go to import packages like "time" and
+// provides a seam for downstream consumers.
 func GenerateModels(model schema.GraphModel, packageName string) ([]byte, error) {
 	if packageName == "" {
 		return nil, fmt.Errorf("packageName must not be empty")
+	}
+
+	// Build custom scalar lookup set for type alias resolution.
+	customScalars := make(map[string]bool, len(model.CustomScalars))
+	for _, s := range model.CustomScalars {
+		customScalars[s] = true
 	}
 
 	var sb strings.Builder
@@ -40,9 +51,9 @@ func GenerateModels(model schema.GraphModel, packageName string) ([]byte, error)
 	propsWritten := map[string]bool{}
 	for _, rel := range model.Relationships {
 		if rel.Properties != nil && !propsWritten[rel.Properties.TypeName] {
-			modelsWritePropertiesType(&sb, rel.Properties)
-			modelsWritePropertiesCreateInput(&sb, rel.Properties)
-			modelsWritePropertiesUpdateInput(&sb, rel.Properties)
+			modelsWritePropertiesType(&sb, rel.Properties, customScalars)
+			modelsWritePropertiesCreateInput(&sb, rel.Properties, customScalars)
+			modelsWritePropertiesUpdateInput(&sb, rel.Properties, customScalars)
 			propsWritten[rel.Properties.TypeName] = true
 		}
 	}
@@ -50,10 +61,10 @@ func GenerateModels(model schema.GraphModel, packageName string) ([]byte, error)
 	// Node types
 	for _, node := range model.Nodes {
 		rels := model.RelationshipsForNode(node.Name)
-		modelsWriteNodeStruct(&sb, node, rels)
-		modelsWriteCreateInput(&sb, node)
-		modelsWriteUpdateInput(&sb, node)
-		modelsWriteWhereInput(&sb, node)
+		modelsWriteNodeStruct(&sb, node, rels, customScalars)
+		modelsWriteCreateInput(&sb, node, customScalars)
+		modelsWriteUpdateInput(&sb, node, customScalars)
+		modelsWriteWhereInput(&sb, node, customScalars)
 		modelsWriteSortInput(&sb, node)
 
 		// Root connection types
@@ -123,39 +134,39 @@ func modelsWriteDeleteInfo(sb *strings.Builder) {
 }
 
 // modelsWritePropertiesType writes a relationship properties struct.
-func modelsWritePropertiesType(sb *strings.Builder, props *schema.PropertiesDefinition) {
+func modelsWritePropertiesType(sb *strings.Builder, props *schema.PropertiesDefinition, customScalars map[string]bool) {
 	sb.WriteString(fmt.Sprintf("type %s struct {\n", props.TypeName))
 	for _, f := range props.Fields {
-		modelsWriteField(sb, f, false)
+		modelsWriteField(sb, f, false, customScalars)
 	}
 	sb.WriteString("}\n\n")
 }
 
 // modelsWritePropertiesCreateInput writes a create input for relationship properties.
-func modelsWritePropertiesCreateInput(sb *strings.Builder, props *schema.PropertiesDefinition) {
+func modelsWritePropertiesCreateInput(sb *strings.Builder, props *schema.PropertiesDefinition, customScalars map[string]bool) {
 	sb.WriteString(fmt.Sprintf("type %sCreateInput struct {\n", props.TypeName))
 	for _, f := range props.Fields {
-		modelsWriteField(sb, f, false)
+		modelsWriteField(sb, f, false, customScalars)
 	}
 	sb.WriteString("}\n\n")
 }
 
 // modelsWritePropertiesUpdateInput writes an update input for relationship properties (all optional).
-func modelsWritePropertiesUpdateInput(sb *strings.Builder, props *schema.PropertiesDefinition) {
+func modelsWritePropertiesUpdateInput(sb *strings.Builder, props *schema.PropertiesDefinition, customScalars map[string]bool) {
 	sb.WriteString(fmt.Sprintf("type %sUpdateInput struct {\n", props.TypeName))
 	for _, f := range props.Fields {
-		modelsWriteField(sb, f, true)
+		modelsWriteField(sb, f, true, customScalars)
 	}
 	sb.WriteString("}\n\n")
 }
 
 // modelsWriteNodeStruct writes a node struct with scalar, relationship, cypher, and connection fields.
-func modelsWriteNodeStruct(sb *strings.Builder, node schema.NodeDefinition, rels []schema.RelationshipDefinition) {
+func modelsWriteNodeStruct(sb *strings.Builder, node schema.NodeDefinition, rels []schema.RelationshipDefinition, customScalars map[string]bool) {
 	sb.WriteString(fmt.Sprintf("type %s struct {\n", node.Name))
 
 	// Scalar fields
 	for _, f := range node.Fields {
-		modelsWriteField(sb, f, false)
+		modelsWriteField(sb, f, false, customScalars)
 	}
 
 	// Relationship fields
@@ -169,7 +180,7 @@ func modelsWriteNodeStruct(sb *strings.Builder, node schema.NodeDefinition, rels
 	// @cypher fields
 	for _, cf := range node.CypherFields {
 		fieldName := strutil.Capitalize(cf.Name)
-		goType := cf.GoType
+		goType := modelsResolveGoType(cf.GraphQLType, cf.GoType, customScalars)
 		tag := modelsJsonTag(cf.Name, cf.Nullable || strings.HasPrefix(goType, "*"))
 		sb.WriteString(fmt.Sprintf("\t%s %s `json:%s`\n", fieldName, goType, tag))
 	}
@@ -178,58 +189,59 @@ func modelsWriteNodeStruct(sb *strings.Builder, node schema.NodeDefinition, rels
 }
 
 // modelsWriteCreateInput writes a CreateInput struct for a node.
-func modelsWriteCreateInput(sb *strings.Builder, node schema.NodeDefinition) {
+func modelsWriteCreateInput(sb *strings.Builder, node schema.NodeDefinition, customScalars map[string]bool) {
 	sb.WriteString(fmt.Sprintf("type %sCreateInput struct {\n", node.Name))
 	for _, f := range node.Fields {
 		if f.IsID {
 			continue // IDs are auto-generated
 		}
-		modelsWriteField(sb, f, false)
+		modelsWriteField(sb, f, false, customScalars)
 	}
 	sb.WriteString("}\n\n")
 }
 
 // modelsWriteUpdateInput writes an UpdateInput struct for a node (all fields optional).
-func modelsWriteUpdateInput(sb *strings.Builder, node schema.NodeDefinition) {
+func modelsWriteUpdateInput(sb *strings.Builder, node schema.NodeDefinition, customScalars map[string]bool) {
 	sb.WriteString(fmt.Sprintf("type %sUpdateInput struct {\n", node.Name))
 	for _, f := range node.Fields {
 		if f.IsID {
 			continue // IDs cannot be updated
 		}
-		modelsWriteField(sb, f, true)
+		modelsWriteField(sb, f, true, customScalars)
 	}
 	sb.WriteString("}\n\n")
 }
 
 // modelsWriteWhereInput writes a Where struct with operator-suffixed fields + AND/OR/NOT.
-func modelsWriteWhereInput(sb *strings.Builder, node schema.NodeDefinition) {
+func modelsWriteWhereInput(sb *strings.Builder, node schema.NodeDefinition, customScalars map[string]bool) {
 	name := node.Name + "Where"
 	sb.WriteString(fmt.Sprintf("type %s struct {\n", name))
 
 	for _, f := range node.Fields {
 		fieldUpper := strutil.Capitalize(f.Name)
+		goType := modelsResolveGoType(f.GraphQLType, f.GoType, customScalars)
 
 		// Equality
-		sb.WriteString(fmt.Sprintf("\t%s %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+",omitempty"))
+		sb.WriteString(fmt.Sprintf("\t%s %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+",omitempty"))
 		// Not
-		sb.WriteString(fmt.Sprintf("\t%sNot %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+"_NOT,omitempty"))
+		sb.WriteString(fmt.Sprintf("\t%sNot %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+"_NOT,omitempty"))
 		// In / NotIn
-		sb.WriteString(fmt.Sprintf("\t%sIn %s `json:%q`\n", fieldUpper, modelsSliceType(f.GoType), f.Name+"_IN,omitempty"))
-		sb.WriteString(fmt.Sprintf("\t%sNotIn %s `json:%q`\n", fieldUpper, modelsSliceType(f.GoType), f.Name+"_NOT_IN,omitempty"))
+		sb.WriteString(fmt.Sprintf("\t%sIn %s `json:%q`\n", fieldUpper, modelsSliceType(goType), f.Name+"_IN,omitempty"))
+		sb.WriteString(fmt.Sprintf("\t%sNotIn %s `json:%q`\n", fieldUpper, modelsSliceType(goType), f.Name+"_NOT_IN,omitempty"))
 
 		// Comparison operators for non-ID fields
 		if !f.IsID {
-			sb.WriteString(fmt.Sprintf("\t%sGt %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+"_GT,omitempty"))
-			sb.WriteString(fmt.Sprintf("\t%sGte %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+"_GTE,omitempty"))
-			sb.WriteString(fmt.Sprintf("\t%sLt %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+"_LT,omitempty"))
-			sb.WriteString(fmt.Sprintf("\t%sLte %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+"_LTE,omitempty"))
+			sb.WriteString(fmt.Sprintf("\t%sGt %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+"_GT,omitempty"))
+			sb.WriteString(fmt.Sprintf("\t%sGte %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+"_GTE,omitempty"))
+			sb.WriteString(fmt.Sprintf("\t%sLt %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+"_LT,omitempty"))
+			sb.WriteString(fmt.Sprintf("\t%sLte %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+"_LTE,omitempty"))
 		}
 
 		// String operators for string types
-		if modelsIsStringType(f.GoType) {
-			sb.WriteString(fmt.Sprintf("\t%sContains %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+"_CONTAINS,omitempty"))
-			sb.WriteString(fmt.Sprintf("\t%sStartsWith %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+"_STARTS_WITH,omitempty"))
-			sb.WriteString(fmt.Sprintf("\t%sEndsWith %s `json:%q`\n", fieldUpper, modelsPtrType(f.GoType), f.Name+"_ENDS_WITH,omitempty"))
+		if modelsIsStringType(goType) {
+			sb.WriteString(fmt.Sprintf("\t%sContains %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+"_CONTAINS,omitempty"))
+			sb.WriteString(fmt.Sprintf("\t%sStartsWith %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+"_STARTS_WITH,omitempty"))
+			sb.WriteString(fmt.Sprintf("\t%sEndsWith %s `json:%q`\n", fieldUpper, modelsPtrType(goType), f.Name+"_ENDS_WITH,omitempty"))
 		}
 	}
 
@@ -368,9 +380,11 @@ func modelsWriteNestedMutationInputTypes(sb *strings.Builder, node schema.NodeDe
 }
 
 // modelsWriteField writes a single struct field with JSON tag.
-func modelsWriteField(sb *strings.Builder, f schema.FieldDefinition, forceOptional bool) {
+// When customScalars contains the field's base GraphQL type, the scalar alias
+// name is used instead of the raw Go type.
+func modelsWriteField(sb *strings.Builder, f schema.FieldDefinition, forceOptional bool, customScalars map[string]bool) {
 	fieldName := strutil.Capitalize(f.Name)
-	goType := f.GoType
+	goType := modelsResolveGoType(f.GraphQLType, f.GoType, customScalars)
 	if forceOptional && !strings.HasPrefix(goType, "*") && !strings.HasPrefix(goType, "[]") {
 		goType = "*" + goType
 	}
@@ -404,4 +418,40 @@ func modelsSliceType(goType string) string {
 func modelsIsStringType(goType string) bool {
 	base := strings.TrimPrefix(goType, "*")
 	return base == "string"
+}
+
+// modelsResolveGoType returns the Go type to use for a field in generated models.
+// If the field's base GraphQL type is a custom scalar declared in the schema,
+// the scalar alias name is used instead of the raw Go type (e.g., "DateTime"
+// instead of "time.Time"). This ensures generated models reference the type
+// aliases defined in scalars_gen.go rather than the underlying Go types.
+func modelsResolveGoType(graphqlType, goType string, customScalars map[string]bool) string {
+	base := modelsStripGraphQLModifiers(graphqlType)
+	if !customScalars[base] {
+		return goType
+	}
+	if modelsIsGraphQLListType(graphqlType) {
+		return "[]" + base
+	}
+	if !strings.HasSuffix(graphqlType, "!") {
+		return "*" + base
+	}
+	return base
+}
+
+// modelsStripGraphQLModifiers extracts the base type name from a GraphQL type string.
+// "DateTime!" → "DateTime", "[DateTime!]!" → "DateTime", "[DateTime!]" → "DateTime".
+func modelsStripGraphQLModifiers(graphqlType string) string {
+	s := strings.TrimSuffix(graphqlType, "!")
+	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
+		s = s[1 : len(s)-1]
+		s = strings.TrimSuffix(s, "!")
+	}
+	return s
+}
+
+// modelsIsGraphQLListType checks if a GraphQL type string is a list type.
+func modelsIsGraphQLListType(graphqlType string) bool {
+	s := strings.TrimSuffix(graphqlType, "!")
+	return strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")
 }
