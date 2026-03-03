@@ -170,8 +170,38 @@ type Actor @node {
 
 Arguments:
 - `type` (required) — the Neo4j relationship type (e.g., `"ACTED_IN"`)
-- `direction` (required) — `IN` or `OUT`
+- `direction` (required) — `IN` or `OUT`, relative to the declaring node (see below)
 - `properties` (optional) — name of a `@relationshipProperties` type for edge data
+
+#### Understanding `direction`
+
+The `direction` argument describes which way the Neo4j relationship arrow points **from the perspective of the node type that declares the field**:
+
+- **`OUT`** — the arrow points **away from** the declaring node: `(DeclaringNode)-[:REL]->(TargetNode)`
+- **`IN`** — the arrow points **into** the declaring node: `(DeclaringNode)<-[:REL]-(TargetNode)`
+
+For example, given the Neo4j relationship `(Actor)-[:ACTED_IN]->(Movie)`, you can declare the same edge from either side:
+
+```graphql
+# From Actor's perspective: the arrow goes OUT of Actor toward Movie
+type Actor @node {
+  movies: [Movie!]! @relationship(type: "ACTED_IN", direction: OUT)
+}
+
+# From Movie's perspective: the arrow comes IN to Movie from Actor
+type Movie @node {
+  actors: [Actor!]! @relationship(type: "ACTED_IN", direction: IN)
+}
+```
+
+Both declarations describe the same physical Neo4j edge. The generated Cypher uses the direction to place the arrow correctly:
+
+| Declaration | Generated Cypher pattern |
+|-------------|--------------------------|
+| `direction: OUT` on `Actor` | `(actor)-[:ACTED_IN]->(movie)` |
+| `direction: IN` on `Movie` | `(movie)<-[:ACTED_IN]-(actor)` |
+
+You can declare the relationship on one side or both — declaring on both sides lets you traverse and mutate the relationship from either node type.
 
 ### `@relationshipProperties`
 
