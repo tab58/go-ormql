@@ -7,13 +7,25 @@ import (
 	"github.com/tab58/go-ormql/pkg/cypher"
 )
 
+// VectorIndex maps a named vector index to its label and property.
+// Used by FalkorDB driver for vector query rewriting.
+type VectorIndex struct {
+	Label    string
+	Property string
+}
+
 // Config holds connection configuration for a graph database driver.
 // Credentials come from environment variables or explicit config, never hardcoded.
 type Config struct {
-	URI      string
+	Host   string
+	Port   int
+	Scheme string
 	Username string
 	Password string
 	Database string
+	// VectorIndexes maps index name → VectorIndex for FalkorDB vector query rewriting.
+	// Optional — only needed when using FalkorDB with @vector directives.
+	VectorIndexes map[string]VectorIndex
 	// Logger enables debug logging of Cypher queries.
 	// When non-nil, the driver logs slog.Debug("cypher.execute", ...) before each query.
 	// When nil (default), no logging overhead occurs.
@@ -45,6 +57,16 @@ type Transaction interface {
 	// Safe to call after Commit (no-op). Safe to call multiple times.
 	// Typically called via defer immediately after BeginTx.
 	Rollback(ctx context.Context) error
+}
+
+// FlattenRows converts []map[string]any rows to a Result with Record entries.
+// Shared by Neo4j and FalkorDB driver implementations.
+func FlattenRows(rows []map[string]any) Result {
+	records := make([]Record, len(rows))
+	for i, row := range rows {
+		records[i] = Record{Values: row}
+	}
+	return Result{Records: records}
 }
 
 // Driver executes Cypher statements against a graph database.

@@ -123,7 +123,8 @@ func newRealNeo4jDriver(cfg driver.Config) (driver.Driver, error) {
 		auth = neo4jDriver.BasicAuth(cfg.Username, cfg.Password, "")
 	}
 
-	drv, err := neo4jDriver.NewDriverWithContext(cfg.URI, auth)
+	uri := buildNeo4jURI(cfg)
+	drv, err := neo4jDriver.NewDriverWithContext(uri, auth)
 	if err != nil {
 		return nil, err
 	}

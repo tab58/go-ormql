@@ -216,6 +216,74 @@ func TestCLN2_GenerateStillWorks(t *testing.T) {
 	}
 }
 
+// === CG-30: CLI --target flag tests ===
+
+// Test: --target flag is accepted by runGenerate without flag-parsing error.
+// Expected: --target neo4j passes flag parsing (may error on codegen, not flag parsing).
+func TestRunGenerate_TargetFlagAccepted(t *testing.T) {
+	schema := writeTempSchema(t)
+	output := t.TempDir()
+
+	err := runGenerate([]string{"--schema", schema, "--output", output, "--target", "neo4j"})
+	if err != nil {
+		s := strings.ToLower(err.Error())
+		if strings.Contains(s, "flag") || strings.Contains(s, "provided but not defined") {
+			t.Errorf("--target flag should be accepted, got flag-parsing error: %v", err)
+		}
+	}
+}
+
+// Test: --target falkordb is accepted by runGenerate without flag-parsing error.
+// Expected: --target falkordb passes flag parsing.
+func TestRunGenerate_TargetFalkorDB(t *testing.T) {
+	schema := writeTempSchema(t)
+	output := t.TempDir()
+
+	err := runGenerate([]string{"--schema", schema, "--output", output, "--target", "falkordb"})
+	if err != nil {
+		s := strings.ToLower(err.Error())
+		if strings.Contains(s, "flag") || strings.Contains(s, "provided but not defined") {
+			t.Errorf("--target falkordb should be accepted, got flag-parsing error: %v", err)
+		}
+	}
+}
+
+// Test: Default target is neo4j when --target is not specified.
+// Expected: runGenerate succeeds without --target (existing behavior preserved).
+func TestRunGenerate_DefaultTargetNeo4j(t *testing.T) {
+	schema := writeTempSchema(t)
+	output := t.TempDir()
+
+	// Without --target, should default to neo4j and not error on target validation
+	err := runGenerate([]string{"--schema", schema, "--output", output})
+	if err != nil {
+		s := strings.ToLower(err.Error())
+		if strings.Contains(s, "target") {
+			t.Errorf("missing --target should default to neo4j, not error about target: %v", err)
+		}
+	}
+}
+
+// Test: Invalid --target value returns a clear error mentioning valid values.
+// Expected: non-nil error containing "unsupported" or "unknown" target (not a flag-parsing error).
+func TestRunGenerate_InvalidTarget(t *testing.T) {
+	schema := writeTempSchema(t)
+	output := t.TempDir()
+
+	err := runGenerate([]string{"--schema", schema, "--output", output, "--target", "mysql"})
+	if err == nil {
+		t.Fatal("--target mysql should return error for invalid target")
+	}
+	s := strings.ToLower(err.Error())
+	// Error should come from target validation, not flag parsing
+	if strings.Contains(s, "flag provided but not defined") {
+		t.Errorf("error should be from target validation, not flag parsing: %v", err)
+	}
+	if !strings.Contains(s, "unsupported") && !strings.Contains(s, "unknown") && !strings.Contains(s, "invalid") {
+		t.Errorf("error should mention 'unsupported', 'unknown', or 'invalid' target, got: %v", err)
+	}
+}
+
 // --- CG-28: CLI @vector warning tests ---
 
 // writeTempSchemaWithVector writes a .graphql schema with @vector directive

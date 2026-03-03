@@ -83,7 +83,7 @@ func TestGenerateIndexes_NoVectorReturnsNil(t *testing.T) {
 			},
 		},
 	}
-	out, err := GenerateIndexes(model, "generated")
+	out, err := GenerateIndexes(model, "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestGenerateIndexes_NoVectorReturnsNil(t *testing.T) {
 // Test: GenerateIndexes returns non-nil output when a node has VectorField.
 // Expected: non-nil, non-empty byte slice.
 func TestGenerateIndexes_SingleVectorReturnsOutput(t *testing.T) {
-	out, err := GenerateIndexes(singleVectorModel(), "generated")
+	out, err := GenerateIndexes(singleVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestGenerateIndexes_SingleVectorReturnsOutput(t *testing.T) {
 // Test: GenerateIndexes output contains CreateIndexes function declaration.
 // Expected: output contains "func CreateIndexes(ctx context.Context, drv driver.Driver) error".
 func TestGenerateIndexes_ContainsCreateIndexesFunc(t *testing.T) {
-	out, err := GenerateIndexes(singleVectorModel(), "generated")
+	out, err := GenerateIndexes(singleVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestGenerateIndexes_ContainsCreateIndexesFunc(t *testing.T) {
 // Test: GenerateIndexes output contains CREATE VECTOR INDEX DDL with correct index name.
 // Expected: output contains "CREATE VECTOR INDEX movie_embeddings IF NOT EXISTS".
 func TestGenerateIndexes_ContainsCreateVectorIndexDDL(t *testing.T) {
-	out, err := GenerateIndexes(singleVectorModel(), "generated")
+	out, err := GenerateIndexes(singleVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestGenerateIndexes_ContainsCreateVectorIndexDDL(t *testing.T) {
 // Test: DDL references correct label and field name.
 // Expected: DDL contains FOR (n:Movie) ON (n.embedding).
 func TestGenerateIndexes_DDLLabelAndField(t *testing.T) {
-	out, err := GenerateIndexes(singleVectorModel(), "generated")
+	out, err := GenerateIndexes(singleVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestGenerateIndexes_DDLLabelAndField(t *testing.T) {
 // Test: DDL contains OPTIONS with vector dimensions and similarity function.
 // Expected: DDL contains dimensions 1536 and similarity 'cosine'.
 func TestGenerateIndexes_DDLOptions(t *testing.T) {
-	out, err := GenerateIndexes(singleVectorModel(), "generated")
+	out, err := GenerateIndexes(singleVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestGenerateIndexes_DDLOptions(t *testing.T) {
 // Test: GenerateIndexes uses drv.ExecuteWrite for DDL execution.
 // Expected: output contains "ExecuteWrite" call.
 func TestGenerateIndexes_UsesExecuteWrite(t *testing.T) {
-	out, err := GenerateIndexes(singleVectorModel(), "generated")
+	out, err := GenerateIndexes(singleVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestGenerateIndexes_UsesExecuteWrite(t *testing.T) {
 // Test: Multiple VectorField nodes produce multiple DDL statements.
 // Expected: output contains both "movie_embeddings" and "article_vectors" indexes.
 func TestGenerateIndexes_MultipleVectors(t *testing.T) {
-	out, err := GenerateIndexes(multiVectorModel(), "generated")
+	out, err := GenerateIndexes(multiVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestGenerateIndexes_MultipleVectors(t *testing.T) {
 // Test: GenerateIndexes output passes gofmt.
 // Expected: gofmt.Source returns no error.
 func TestGenerateIndexes_PassesGofmt(t *testing.T) {
-	out, err := GenerateIndexes(singleVectorModel(), "generated")
+	out, err := GenerateIndexes(singleVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestGenerateIndexes_PassesGofmt(t *testing.T) {
 // Test: GenerateIndexes output contains correct package declaration.
 // Expected: output starts with "package generated".
 func TestGenerateIndexes_PackageDeclaration(t *testing.T) {
-	out, err := GenerateIndexes(singleVectorModel(), "generated")
+	out, err := GenerateIndexes(singleVectorModel(), "generated", TargetNeo4j)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

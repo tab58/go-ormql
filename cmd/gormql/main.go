@@ -32,12 +32,13 @@ func run(args []string) error {
 
 // runGenerate handles the "generate" subcommand.
 // Required flags: --schema (comma-separated .graphql files), --output (output directory).
-// Optional flags: --package (Go package name, default "generated").
+// Optional flags: --package (Go package name, default "generated"), --target (neo4j or falkordb, default "neo4j").
 func runGenerate(args []string) error {
 	fs := flag.NewFlagSet("generate", flag.ContinueOnError)
 	schemaFlag := fs.String("schema", "", "comma-separated .graphql schema files")
 	outputFlag := fs.String("output", "", "output directory for generated code")
 	packageFlag := fs.String("package", "generated", "Go package name for generated code")
+	targetFlag := fs.String("target", "", "graph database target: neo4j (default), falkordb")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -56,6 +57,7 @@ func runGenerate(args []string) error {
 		SchemaFiles: schemaFiles,
 		OutputDir:   *outputFlag,
 		PackageName: *packageFlag,
+		Target:      codegen.Target(*targetFlag),
 		Stderr:      os.Stderr,
 	})
 }

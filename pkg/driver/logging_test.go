@@ -12,7 +12,9 @@ import (
 func TestConfig_LoggerField(t *testing.T) {
 	logger := slog.Default()
 	cfg := Config{
-		URI:      "bolt://localhost:7687",
+		Host:     "localhost",
+		Port:     7687,
+		Scheme:   "bolt",
 		Username: "neo4j",
 		Password: "password",
 		Database: "neo4j",

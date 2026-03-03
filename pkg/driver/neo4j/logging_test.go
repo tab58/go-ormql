@@ -134,7 +134,9 @@ func TestNeo4jDriver_LogsQueryAndParams(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	cfg := driver.Config{
-		URI:      "bolt://localhost:7687",
+		Host:     "localhost",
+		Port:     7687,
+		Scheme:   "bolt",
 		Username: "neo4j",
 		Password: "password",
 		Database: "neo4j",

@@ -13,7 +13,9 @@ import (
 func main() {
 	ctx := context.Background()
 	drv, err := neo4j.NewNeo4jDriver(driver.Config{
-		URI:      "bolt://localhost:7687",
+		Host:     "localhost",
+		Port:     7687,
+		Scheme:   "bolt",
 		Username: "neo4j",
 		Password: "password",
 	})

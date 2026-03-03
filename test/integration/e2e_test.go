@@ -68,8 +68,15 @@ func startNeo4jContainer(t *testing.T) driver.Config {
 		t.Fatalf("failed to get Neo4j bolt URL: %v", err)
 	}
 
+	scheme, host, port, parseErr := neo4jdriver.ParseBoltURL(boltURL)
+	if parseErr != nil {
+		t.Fatalf("failed to parse bolt URL %q: %v", boltURL, parseErr)
+	}
+
 	return driver.Config{
-		URI:      boltURL,
+		Host:     host,
+		Port:     port,
+		Scheme:   scheme,
 		Username: "neo4j",
 		Password: "",
 		Database: "neo4j",

@@ -10,14 +10,12 @@ import (
 	"github.com/tab58/go-ormql/pkg/schema"
 )
 
-// vectorWarning is printed to stderr when @vector directives are detected.
-const vectorWarning = "Warning: @vector directive requires Neo4j 5.11+"
-
 // Config controls the code generation pipeline.
 type Config struct {
 	SchemaFiles []string  // paths to .graphql schema files
 	OutputDir   string    // directory for all generated output
 	PackageName string    // Go package name for generated code
+	Target      Target    // graph database target (default: TargetNeo4j)
 	Stderr      io.Writer // optional writer for warnings (e.g., os.Stderr)
 }
 
@@ -57,9 +55,15 @@ func Generate(cfg Config) error {
 		return fmt.Errorf("schema parse failed: %w", err)
 	}
 
+	// Validate and normalize target.
+	target, err := validateTarget(cfg.Target)
+	if err != nil {
+		return fmt.Errorf("invalid target: %w", err)
+	}
+
 	// Emit @vector warning if any node uses the directive.
 	if cfg.Stderr != nil && model.HasVectorField() {
-		fmt.Fprintln(cfg.Stderr, vectorWarning)
+		fmt.Fprintln(cfg.Stderr, vectorWarningForTarget(target))
 	}
 
 	// 2. Augment schema and write to output.
@@ -100,7 +104,7 @@ func Generate(cfg Config) error {
 	}
 
 	// 6. Generate vector indexes (conditional — only when @vector is present).
-	indexesSrc, err := GenerateIndexes(model, packageName)
+	indexesSrc, err := GenerateIndexes(model, packageName, target)
 	if err != nil {
 		return fmt.Errorf("failed to generate indexes: %w", err)
 	}

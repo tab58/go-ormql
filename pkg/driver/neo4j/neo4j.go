@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strconv"
 	"sync"
 
 	"github.com/tab58/go-ormql/pkg/cypher"
@@ -48,9 +50,12 @@ type Neo4jDriver struct {
 // NewNeo4jDriver creates a Neo4j driver instance connected to the given URI.
 // Returns a clear error (without credentials) if connection fails.
 func NewNeo4jDriver(cfg driver.Config) (driver.Driver, error) {
+	if err := validateNeo4jConfig(cfg); err != nil {
+		return nil, err
+	}
 	drv, err := newRealNeo4jDriver(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Neo4j at %s: %w", cfg.URI, err)
+		return nil, fmt.Errorf("failed to connect to Neo4j at %s:%d: %w", cfg.Host, cfg.Port, err)
 	}
 	return drv, nil
 }
@@ -93,7 +98,7 @@ func (d *Neo4jDriver) Execute(ctx context.Context, stmt cypher.Statement) (drive
 		return driver.Result{}, fmt.Errorf("execute read: %w", err)
 	}
 
-	return flattenRows(rows), nil
+	return driver.FlattenRows(rows), nil
 }
 
 // ExecuteWrite runs a write query using a write session.
@@ -114,7 +119,7 @@ func (d *Neo4jDriver) ExecuteWrite(ctx context.Context, stmt cypher.Statement) (
 		return driver.Result{}, fmt.Errorf("execute write: %w", err)
 	}
 
-	return flattenRows(rows), nil
+	return driver.FlattenRows(rows), nil
 }
 
 // BeginTx opens an explicit transaction for multi-statement operations.
@@ -177,7 +182,7 @@ func (t *neo4jTransaction) Execute(ctx context.Context, stmt cypher.Statement) (
 	if err != nil {
 		return driver.Result{}, fmt.Errorf("tx execute: %w", err)
 	}
-	return flattenRows(rows), nil
+	return driver.FlattenRows(rows), nil
 }
 
 // Commit commits all operations in the transaction.
@@ -211,11 +216,52 @@ func (t *neo4jTransaction) Rollback(ctx context.Context) error {
 	return nil
 }
 
-// flattenRows converts []map[string]any rows to driver.Result with driver.Record entries.
-func flattenRows(rows []map[string]any) driver.Result {
-	records := make([]driver.Record, len(rows))
-	for i, row := range rows {
-		records[i] = driver.Record{Values: row}
+// defaultBoltPort is the default port for the bolt protocol.
+const defaultBoltPort = 7687
+
+// validNeo4jSchemes lists the schemes accepted by the Neo4j driver.
+var validNeo4jSchemes = map[string]bool{
+	"bolt": true, "bolt+s": true, "bolt+ssc": true,
+	"neo4j": true, "neo4j+s": true, "neo4j+ssc": true,
+}
+
+// validateNeo4jConfig validates Config fields for Neo4j connection.
+// Returns a clear error for invalid scheme or empty host.
+func validateNeo4jConfig(cfg driver.Config) error {
+	if cfg.Host == "" {
+		return fmt.Errorf("neo4j: host is required")
 	}
-	return driver.Result{Records: records}
+	if !validNeo4jSchemes[cfg.Scheme] {
+		return fmt.Errorf("neo4j: unsupported scheme %q (valid: bolt, bolt+s, bolt+ssc, neo4j, neo4j+s, neo4j+ssc)", cfg.Scheme)
+	}
+	return nil
+}
+
+// buildNeo4jURI assembles a URI string from Config Host/Port/Scheme.
+func buildNeo4jURI(cfg driver.Config) string {
+	return fmt.Sprintf("%s://%s:%d", cfg.Scheme, cfg.Host, cfg.Port)
+}
+
+// ParseBoltURL extracts scheme, host, and port from a bolt URL.
+// Used by integration tests to parse bolt URLs returned by testcontainers.
+func ParseBoltURL(rawURL string) (scheme string, host string, port int, err error) {
+	u, parseErr := url.Parse(rawURL)
+	if parseErr != nil {
+		return "", "", 0, fmt.Errorf("invalid URL %q: %w", rawURL, parseErr)
+	}
+	if u.Host == "" {
+		return "", "", 0, fmt.Errorf("invalid URL %q: missing host", rawURL)
+	}
+	scheme = u.Scheme
+	host = u.Hostname()
+	portStr := u.Port()
+	if portStr == "" {
+		port = defaultBoltPort
+	} else {
+		port, err = strconv.Atoi(portStr)
+		if err != nil {
+			return "", "", 0, fmt.Errorf("invalid port in URL %q: %w", rawURL, err)
+		}
+	}
+	return scheme, host, port, nil
 }
