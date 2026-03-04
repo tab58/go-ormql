@@ -37,12 +37,15 @@ func AugmentSchema(model schema.GraphModel) (string, error) {
 	// Generate input types, response types, connection types, and similar result types per node.
 	for _, node := range model.Nodes {
 		rels := relationshipsForNode(model, node.Name)
-		writeWhereInput(&b, node)
+		writeWhereInput(&b, node, rels, model, 0)
 		writeSortInput(&b, node)
 		writeCreateInput(&b, node, rels)
 		writeUpdateInput(&b, node, rels)
 		writeCreateResponse(&b, node)
 		writeUpdateResponse(&b, node)
+		writeMatchInput(&b, node)
+		writeMergeInput(&b, node)
+		writeMergeMutationResponse(&b, node)
 		writeConnectionTypes(&b, node)
 		if node.VectorField != nil {
 			writeSimilarResultType(&b, node)
@@ -66,15 +69,23 @@ func AugmentSchema(model schema.GraphModel) (string, error) {
 		}
 	}
 
+	// Connect input types per relationship.
+	for _, rel := range model.Relationships {
+		writeConnectInput(&b, rel)
+	}
+
 	// Shared types (generated once).
 	writeSharedTypes(&b)
+	if len(model.Relationships) > 0 {
+		writeConnectInfo(&b)
+	}
 	writeSortDirection(&b)
 
 	// Query type.
 	writeQueryType(&b, model.Nodes)
 
 	// Mutation type.
-	writeMutationType(&b, model.Nodes)
+	writeMutationType(&b, model.Nodes, model.Relationships)
 
 	return b.String(), nil
 }
@@ -120,13 +131,18 @@ func writeCypherField(b *strings.Builder, cf schema.CypherFieldDefinition) {
 	fmt.Fprintf(b, "  %s(%s): %s\n", cf.Name, strings.Join(args, ", "), cf.GraphQLType)
 }
 
+// relWhereDepthCap is the maximum depth for relationship-based WHERE filter fields.
+// At this depth, Where types omit relationship filter fields to prevent infinite recursion.
+const relWhereDepthCap = 3
+
 // writeWhereInput writes the where input type with equality fields plus operator-suffixed fields.
 // All fields are optional (nullable) for filtering.
 // Operator fields: comparison (_gt, _gte, _lt, _lte) for Int/Float/String/ID (not Boolean),
 // string ops (_contains, _startsWith, _endsWith, _regex) for String/ID only,
 // list ops (_in, _nin) and _not for all scalars, _isNull: Boolean for all scalars.
 // Boolean composition: AND, OR, NOT.
-func writeWhereInput(b *strings.Builder, node schema.NodeDefinition) {
+// Relationship-based WHERE filters are added for each relationship at depth < relWhereDepthCap.
+func writeWhereInput(b *strings.Builder, node schema.NodeDefinition, rels []schema.RelationshipDefinition, model schema.GraphModel, depth int) {
 	fmt.Fprintf(b, "input %sWhere {\n", node.Name)
 	for _, f := range node.Fields {
 		// Exclude vector fields from Where input (not filterable)
@@ -162,6 +178,19 @@ func writeWhereInput(b *strings.Builder, node schema.NodeDefinition) {
 
 		// Null check (_isNull) — all scalar types
 		fmt.Fprintf(b, "  %s_isNull: Boolean\n", f.Name)
+	}
+	// Relationship-based WHERE filter fields (depth-limited to prevent infinite recursion)
+	if depth < relWhereDepthCap {
+		for _, rel := range rels {
+			if rel.FromNode != node.Name {
+				continue
+			}
+			if rel.IsList {
+				fmt.Fprintf(b, "  %s_some: %sWhere\n", rel.FieldName, rel.ToNode)
+			} else {
+				fmt.Fprintf(b, "  %s: %sWhere\n", rel.FieldName, rel.ToNode)
+			}
+		}
 	}
 	// Boolean composition
 	fmt.Fprintf(b, "  AND: [%sWhere!]\n", node.Name)
@@ -339,19 +368,6 @@ func writeQueryType(b *strings.Builder, nodes []schema.NodeDefinition) {
 	fmt.Fprintln(b)
 }
 
-// writeMutationType writes the root Mutation type with CRUD mutations for all nodes.
-func writeMutationType(b *strings.Builder, nodes []schema.NodeDefinition) {
-	fmt.Fprintln(b, "type Mutation {")
-	for _, node := range nodes {
-		pc := pluralCapitalized(node.Name)
-		fmt.Fprintf(b, "  create%s(input: [%sCreateInput!]!): Create%sMutationResponse!\n", pc, node.Name, pc)
-		fmt.Fprintf(b, "  update%s(where: %sWhere, update: %sUpdateInput): Update%sMutationResponse!\n", pc, node.Name, node.Name, pc)
-		fmt.Fprintf(b, "  delete%s(where: %sWhere): DeleteInfo!\n", pc, node.Name)
-	}
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-}
-
 // stripNonNull removes the trailing "!" from a GraphQL type string if present.
 func stripNonNull(gqlType string) string {
 	return strings.TrimSuffix(gqlType, "!")
@@ -369,146 +385,3 @@ func relationshipsForNode(model schema.GraphModel, nodeName string) []schema.Rel
 	return result
 }
 
-// writeNestedInputTypes writes the FieldInput, CreateFieldInput, and ConnectFieldInput
-// types for a single relationship.
-func writeNestedInputTypes(b *strings.Builder, rel schema.RelationshipDefinition) {
-	prefix := rel.FromNode + strutil.Capitalize(rel.FieldName)
-
-	// FieldInput: { create: [...], connect: [...] }
-	fmt.Fprintf(b, "input %sFieldInput {\n", prefix)
-	fmt.Fprintf(b, "  create: [%sCreateFieldInput!]\n", prefix)
-	fmt.Fprintf(b, "  connect: [%sConnectFieldInput!]\n", prefix)
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-
-	// CreateFieldInput: { node: <ToNode>CreateInput!, edge: <Props>CreateInput }
-	fmt.Fprintf(b, "input %sCreateFieldInput {\n", prefix)
-	fmt.Fprintf(b, "  node: %sCreateInput!\n", rel.ToNode)
-	if rel.Properties != nil {
-		fmt.Fprintf(b, "  edge: %sCreateInput\n", rel.Properties.TypeName)
-	}
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-
-	// ConnectFieldInput: { where: <ToNode>Where, edge: <Props>CreateInput }
-	fmt.Fprintf(b, "input %sConnectFieldInput {\n", prefix)
-	fmt.Fprintf(b, "  where: %sWhere\n", rel.ToNode)
-	if rel.Properties != nil {
-		fmt.Fprintf(b, "  edge: %sCreateInput\n", rel.Properties.TypeName)
-	}
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-}
-
-// writeRelConnectionTypes writes the connection and edge types for a single relationship.
-// {Node}{FieldCap}Connection { edges, pageInfo, totalCount }
-// {Node}{FieldCap}Edge { node, cursor, properties? }
-func writeRelConnectionTypes(b *strings.Builder, rel schema.RelationshipDefinition) {
-	prefix := rel.FromNode + strutil.Capitalize(rel.FieldName)
-
-	// Connection type
-	fmt.Fprintf(b, "type %sConnection {\n", prefix)
-	fmt.Fprintf(b, "  edges: [%sEdge!]!\n", prefix)
-	fmt.Fprintln(b, "  pageInfo: PageInfo!")
-	fmt.Fprintln(b, "  totalCount: Int!")
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-
-	// Edge type
-	fmt.Fprintf(b, "type %sEdge {\n", prefix)
-	fmt.Fprintf(b, "  node: %s!\n", rel.ToNode)
-	fmt.Fprintln(b, "  cursor: String!")
-	if rel.Properties != nil {
-		fmt.Fprintf(b, "  properties: %s\n", rel.Properties.TypeName)
-	}
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-}
-
-// writePropertiesType writes the output type for a @relationshipProperties type (for reading edge properties).
-func writePropertiesType(b *strings.Builder, props schema.PropertiesDefinition) {
-	fmt.Fprintf(b, "type %s {\n", props.TypeName)
-	for _, f := range props.Fields {
-		fmt.Fprintf(b, "  %s: %s\n", f.Name, f.GraphQLType)
-	}
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-}
-
-// writePropertiesCreateInput writes the CreateInput type for a @relationshipProperties type.
-func writePropertiesCreateInput(b *strings.Builder, props schema.PropertiesDefinition) {
-	writePropertiesInput(b, props, "Create", false)
-}
-
-// writeUpdateFieldInput writes the UpdateFieldInput type for a relationship with all 5 ops.
-// {Node}{FieldCap}UpdateFieldInput { create, connect, disconnect, update, delete }
-func writeUpdateFieldInput(b *strings.Builder, rel schema.RelationshipDefinition) {
-	prefix := rel.FromNode + strutil.Capitalize(rel.FieldName)
-
-	fmt.Fprintf(b, "input %sUpdateFieldInput {\n", prefix)
-	fmt.Fprintf(b, "  create: [%sCreateFieldInput!]\n", prefix)
-	fmt.Fprintf(b, "  connect: [%sConnectFieldInput!]\n", prefix)
-	fmt.Fprintf(b, "  disconnect: [%sDisconnectFieldInput!]\n", prefix)
-	fmt.Fprintf(b, "  update: %sUpdateConnectionInput\n", prefix)
-	fmt.Fprintf(b, "  delete: [%sDeleteFieldInput!]\n", prefix)
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-}
-
-// writeDisconnectFieldInput writes the DisconnectFieldInput type for a relationship.
-func writeDisconnectFieldInput(b *strings.Builder, rel schema.RelationshipDefinition) {
-	writeWhereOnlyInput(b, rel, "Disconnect")
-}
-
-// writeDeleteFieldInput writes the DeleteFieldInput type for a relationship.
-func writeDeleteFieldInput(b *strings.Builder, rel schema.RelationshipDefinition) {
-	writeWhereOnlyInput(b, rel, "Delete")
-}
-
-// writeWhereOnlyInput writes a relationship input type that contains only a where field.
-// Pattern: input {Node}{FieldCap}{suffix}FieldInput { where: {TargetNode}Where }
-func writeWhereOnlyInput(b *strings.Builder, rel schema.RelationshipDefinition, suffix string) {
-	prefix := rel.FromNode + strutil.Capitalize(rel.FieldName)
-
-	fmt.Fprintf(b, "input %s%sFieldInput {\n", prefix, suffix)
-	fmt.Fprintf(b, "  where: %sWhere\n", rel.ToNode)
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-}
-
-// writeUpdateConnectionInput writes the UpdateConnectionInput type for a relationship.
-// {Node}{FieldCap}UpdateConnectionInput { where, node, edge? }
-// The edge field is only present when @relationshipProperties exists.
-func writeUpdateConnectionInput(b *strings.Builder, rel schema.RelationshipDefinition) {
-	prefix := rel.FromNode + strutil.Capitalize(rel.FieldName)
-
-	fmt.Fprintf(b, "input %sUpdateConnectionInput {\n", prefix)
-	fmt.Fprintf(b, "  where: %sWhere\n", rel.ToNode)
-	fmt.Fprintf(b, "  node: %sUpdateInput\n", rel.ToNode)
-	if rel.Properties != nil {
-		fmt.Fprintf(b, "  edge: %sUpdateInput\n", rel.Properties.TypeName)
-	}
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-}
-
-// writePropertiesUpdateInput writes the UpdateInput type for a @relationshipProperties type.
-// All fields are optional (non-null markers stripped).
-func writePropertiesUpdateInput(b *strings.Builder, props schema.PropertiesDefinition) {
-	writePropertiesInput(b, props, "Update", true)
-}
-
-// writePropertiesInput writes a properties input type with the given suffix.
-// When makeOptional is true, non-null markers (!) are stripped from field types.
-func writePropertiesInput(b *strings.Builder, props schema.PropertiesDefinition, suffix string, makeOptional bool) {
-	fmt.Fprintf(b, "input %s%sInput {\n", props.TypeName, suffix)
-	for _, f := range props.Fields {
-		gqlType := f.GraphQLType
-		if makeOptional {
-			gqlType = stripNonNull(gqlType)
-		}
-		fmt.Fprintf(b, "  %s: %s\n", f.Name, gqlType)
-	}
-	fmt.Fprintln(b, "}")
-	fmt.Fprintln(b)
-}

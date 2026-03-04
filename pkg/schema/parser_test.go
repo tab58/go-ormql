@@ -576,3 +576,146 @@ func TestParseSchema_FileNotFound(t *testing.T) {
 		t.Fatal("ParseSchema returned nil error for nonexistent file, want error")
 	}
 }
+
+// TestParseSchemaString_IsList_ToMany verifies that a to-many relationship field
+// (list type like [Actor!]!) sets IsList=true on the RelationshipDefinition.
+func TestParseSchemaString_IsList_ToMany(t *testing.T) {
+	sdl := `
+		type Movie @node {
+			id: ID!
+			title: String!
+			actors: [Actor!]! @relationship(type: "ACTED_IN", direction: IN)
+		}
+		type Actor @node {
+			id: ID!
+			name: String!
+		}
+	`
+
+	model, err := ParseSchemaString(sdl)
+	if err != nil {
+		t.Fatalf("ParseSchemaString returned error: %v", err)
+	}
+	if len(model.Relationships) != 1 {
+		t.Fatalf("len(Relationships) = %d, want 1", len(model.Relationships))
+	}
+
+	rel := model.Relationships[0]
+	if rel.FieldName != "actors" {
+		t.Errorf("rel.FieldName = %q, want %q", rel.FieldName, "actors")
+	}
+	// [Actor!]! is a list type, so IsList should be true
+	if !rel.IsList {
+		t.Errorf("rel.IsList = false, want true for to-many field [Actor!]!")
+	}
+}
+
+// TestParseSchemaString_IsList_ToOne verifies that a to-one relationship field
+// (singular type like Repository!) sets IsList=false on the RelationshipDefinition.
+func TestParseSchemaString_IsList_ToOne(t *testing.T) {
+	sdl := `
+		type Movie @node {
+			id: ID!
+			title: String!
+			repository: Repository! @relationship(type: "BELONGS_TO", direction: OUT)
+		}
+		type Repository @node {
+			id: ID!
+			name: String!
+		}
+	`
+
+	model, err := ParseSchemaString(sdl)
+	if err != nil {
+		t.Fatalf("ParseSchemaString returned error: %v", err)
+	}
+	if len(model.Relationships) != 1 {
+		t.Fatalf("len(Relationships) = %d, want 1", len(model.Relationships))
+	}
+
+	rel := model.Relationships[0]
+	if rel.FieldName != "repository" {
+		t.Errorf("rel.FieldName = %q, want %q", rel.FieldName, "repository")
+	}
+	// Repository! is a singular type, so IsList should be false
+	if rel.IsList {
+		t.Errorf("rel.IsList = true, want false for to-one field Repository!")
+	}
+}
+
+// TestParseSchemaString_IsList_NullableList verifies that a nullable list type
+// (like [Actor]) still sets IsList=true.
+func TestParseSchemaString_IsList_NullableList(t *testing.T) {
+	sdl := `
+		type Movie @node {
+			id: ID!
+			title: String!
+			actors: [Actor] @relationship(type: "ACTED_IN", direction: IN)
+		}
+		type Actor @node {
+			id: ID!
+			name: String!
+		}
+	`
+
+	model, err := ParseSchemaString(sdl)
+	if err != nil {
+		t.Fatalf("ParseSchemaString returned error: %v", err)
+	}
+	if len(model.Relationships) != 1 {
+		t.Fatalf("len(Relationships) = %d, want 1", len(model.Relationships))
+	}
+
+	// [Actor] is a list (nullable elements, nullable list), IsList should still be true
+	if !model.Relationships[0].IsList {
+		t.Errorf("rel.IsList = false, want true for nullable list field [Actor]")
+	}
+}
+
+// TestParseSchemaString_IsList_MixedRelationships verifies that a node with both
+// to-one and to-many relationship fields correctly sets IsList on each.
+func TestParseSchemaString_IsList_MixedRelationships(t *testing.T) {
+	sdl := `
+		type File @node {
+			id: ID!
+			path: String!
+			repository: Repository! @relationship(type: "BELONGS_TO", direction: OUT)
+			subfolders: [File!]! @relationship(type: "CONTAINS", direction: OUT)
+		}
+		type Repository @node {
+			id: ID!
+			name: String!
+		}
+	`
+
+	model, err := ParseSchemaString(sdl)
+	if err != nil {
+		t.Fatalf("ParseSchemaString returned error: %v", err)
+	}
+	if len(model.Relationships) != 2 {
+		t.Fatalf("len(Relationships) = %d, want 2", len(model.Relationships))
+	}
+
+	relMap := map[string]RelationshipDefinition{}
+	for _, r := range model.Relationships {
+		relMap[r.FieldName] = r
+	}
+
+	// repository: Repository! → to-one → IsList=false
+	repoRel, ok := relMap["repository"]
+	if !ok {
+		t.Fatal("missing relationship for field 'repository'")
+	}
+	if repoRel.IsList {
+		t.Errorf("repository.IsList = true, want false for to-one field")
+	}
+
+	// subfolders: [File!]! → to-many → IsList=true
+	subfRel, ok := relMap["subfolders"]
+	if !ok {
+		t.Fatal("missing relationship for field 'subfolders'")
+	}
+	if !subfRel.IsList {
+		t.Errorf("subfolders.IsList = false, want true for to-many field")
+	}
+}

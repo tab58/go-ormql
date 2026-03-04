@@ -224,3 +224,95 @@ func TestGenerateGraphModelRegistry_EmptyPackageName(t *testing.T) {
 		t.Error("GenerateGraphModelRegistry with empty packageName should return error")
 	}
 }
+
+// === CG-35: IsList serialization in registry tests ===
+
+// TestGenerateGraphModelRegistry_IsListTrue verifies that IsList: true is serialized
+// for to-many relationships in the GraphModel registry.
+// Expected: generated output contains "IsList: true".
+func TestGenerateGraphModelRegistry_IsListTrue(t *testing.T) {
+	model := schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{Name: "Movie", Labels: []string{"Movie"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+			}},
+			{Name: "Actor", Labels: []string{"Actor"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+			}},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			{FieldName: "actors", RelType: "ACTED_IN", Direction: schema.DirectionIN, FromNode: "Movie", ToNode: "Actor", IsList: true},
+		},
+	}
+
+	out, err := GenerateGraphModelRegistry(model, testAugSchemaSDL, "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "IsList: true") {
+		t.Errorf("registry output missing 'IsList: true' for to-many relationship:\n%s", src)
+	}
+}
+
+// TestGenerateGraphModelRegistry_IsListFalse verifies that IsList: false is serialized
+// for to-one relationships in the GraphModel registry.
+// Expected: generated output contains "IsList: false".
+func TestGenerateGraphModelRegistry_IsListFalse(t *testing.T) {
+	model := schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{Name: "Movie", Labels: []string{"Movie"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+			}},
+			{Name: "Repository", Labels: []string{"Repository"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+			}},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			{FieldName: "repository", RelType: "BELONGS_TO", Direction: schema.DirectionOUT, FromNode: "Movie", ToNode: "Repository", IsList: false},
+		},
+	}
+
+	out, err := GenerateGraphModelRegistry(model, testAugSchemaSDL, "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "IsList: false") {
+		t.Errorf("registry output missing 'IsList: false' for to-one relationship:\n%s", src)
+	}
+}
+
+// TestGenerateGraphModelRegistry_IsListMixed verifies that both IsList values appear
+// when the model has both to-one and to-many relationships.
+func TestGenerateGraphModelRegistry_IsListMixed(t *testing.T) {
+	model := schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{Name: "Movie", Labels: []string{"Movie"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+			}},
+			{Name: "Actor", Labels: []string{"Actor"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+			}},
+			{Name: "Repository", Labels: []string{"Repository"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+			}},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			{FieldName: "actors", RelType: "ACTED_IN", Direction: schema.DirectionIN, FromNode: "Movie", ToNode: "Actor", IsList: true},
+			{FieldName: "repository", RelType: "BELONGS_TO", Direction: schema.DirectionOUT, FromNode: "Movie", ToNode: "Repository", IsList: false},
+		},
+	}
+
+	out, err := GenerateGraphModelRegistry(model, testAugSchemaSDL, "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "IsList: true") {
+		t.Errorf("registry output missing 'IsList: true':\n%s", src)
+	}
+	if !strings.Contains(src, "IsList: false") {
+		t.Errorf("registry output missing 'IsList: false':\n%s", src)
+	}
+}

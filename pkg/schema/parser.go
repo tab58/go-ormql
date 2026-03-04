@@ -122,6 +122,7 @@ func parseFromSources(sources []*ast.Source) (GraphModel, error) {
 					Direction: relInfo.Direction,
 					FromNode:  t.Name,
 					ToNode:    toNode,
+					IsList:    f.Type.Elem != nil,
 				}
 				if relInfo.Properties != "" {
 					if props, ok := propsMap[relInfo.Properties]; ok {

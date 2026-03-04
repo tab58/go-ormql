@@ -36,6 +36,10 @@ func (t *Translator) translateMutation(op *ast.OperationDefinition, scope *param
 			callBlock, alias, err = t.translateUpdateField(field, scope)
 		case strings.HasPrefix(name, "delete"):
 			callBlock, alias, err = t.translateDeleteField(field, scope)
+		case strings.HasPrefix(name, "merge"):
+			callBlock, alias, err = t.translateMergeField(field, scope)
+		case strings.HasPrefix(name, "connect"):
+			callBlock, alias, err = t.translateConnectField(field, scope)
 		default:
 			return "", fmt.Errorf("unknown mutation field %q", name)
 		}
@@ -91,18 +95,7 @@ func (t *Translator) translateCreateField(field *ast.Field, scope *paramScope) (
 	rels := t.model.RelationshipsForNode(node.Name)
 
 	// Find the "movies" (or equivalent) response field for projection
-	var projSelSet ast.SelectionSet
-	for _, sel := range field.SelectionSet {
-		f, ok := sel.(*ast.Field)
-		if !ok {
-			continue
-		}
-		// The response field is typically named after the plural node type (e.g., "movies")
-		if len(f.SelectionSet) > 0 {
-			projSelSet = f.SelectionSet
-			break
-		}
-	}
+	projSelSet := findResponseSelectionSet(field.SelectionSet)
 
 	// Build SET clauses from node fields
 	var setParts []string
@@ -125,22 +118,10 @@ func (t *Translator) translateCreateField(field *ast.Field, scope *paramScope) (
 		sb.WriteString(fmt.Sprintf(" WITH n, item %s", nestedOps))
 	}
 
-	// Build projection for return
-	if projSelSet != nil {
-		fc := fieldContext{node: node, variable: "n", depth: 0}
-		proj, subqueries, err := t.buildProjection(projSelSet, fc, scope)
-		if err != nil {
-			return "", "", fmt.Errorf("create projection: %w", err)
-		}
-		for _, sq := range subqueries {
-			sb.WriteString(" ")
-			sb.WriteString(sq)
-		}
-		sb.WriteString(fmt.Sprintf(" RETURN collect(%s) AS %s", proj, alias))
-	} else {
-		sb.WriteString(fmt.Sprintf(" RETURN collect(n {}) AS %s", alias))
+	// Build projection for return and close CALL block
+	if err := t.appendProjectionReturn(&sb, projSelSet, node, alias, scope, "create"); err != nil {
+		return "", "", err
 	}
-	sb.WriteString(" }")
 
 	return sb.String(), alias, nil
 }
@@ -195,17 +176,7 @@ func (t *Translator) translateUpdateField(field *ast.Field, scope *paramScope) (
 	}
 
 	// Find response field for projection
-	var projSelSet ast.SelectionSet
-	for _, sel := range field.SelectionSet {
-		f, ok := sel.(*ast.Field)
-		if !ok {
-			continue
-		}
-		if len(f.SelectionSet) > 0 {
-			projSelSet = f.SelectionSet
-			break
-		}
-	}
+	projSelSet := findResponseSelectionSet(field.SelectionSet)
 
 	var sb strings.Builder
 	sb.WriteString("CALL { ")
@@ -222,22 +193,10 @@ func (t *Translator) translateUpdateField(field *ast.Field, scope *paramScope) (
 		sb.WriteString(fmt.Sprintf(" WITH n%s", nestedOps))
 	}
 
-	// Build projection for return
-	if projSelSet != nil {
-		fc := fieldContext{node: node, variable: "n", depth: 0}
-		proj, subqueries, err := t.buildProjection(projSelSet, fc, scope)
-		if err != nil {
-			return "", "", fmt.Errorf("update projection: %w", err)
-		}
-		for _, sq := range subqueries {
-			sb.WriteString(" ")
-			sb.WriteString(sq)
-		}
-		sb.WriteString(fmt.Sprintf(" RETURN collect(%s) AS %s", proj, alias))
-	} else {
-		sb.WriteString(fmt.Sprintf(" RETURN collect(n {}) AS %s", alias))
+	// Build projection for return and close CALL block
+	if err := t.appendProjectionReturn(&sb, projSelSet, node, alias, scope, "update"); err != nil {
+		return "", "", err
 	}
-	sb.WriteString(" }")
 
 	return sb.String(), alias, nil
 }

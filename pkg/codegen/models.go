@@ -87,6 +87,23 @@ func GenerateModels(model schema.GraphModel, packageName string) ([]byte, error)
 		}
 	}
 
+	// Merge types per node
+	for _, node := range model.Nodes {
+		modelsWriteMatchInput(&sb, node, customScalars)
+		modelsWriteMergeInput(&sb, node)
+		modelsWriteMergeMutationResponse(&sb, node)
+	}
+
+	// Connect types per relationship + shared ConnectInfo
+	connectInfoWritten := false
+	for _, rel := range model.Relationships {
+		modelsWriteConnectInput(&sb, rel)
+		if !connectInfoWritten {
+			modelsWriteConnectInfo(&sb)
+			connectInfoWritten = true
+		}
+	}
+
 	src := sb.String()
 	formatted, err := format.Source([]byte(src))
 	if err != nil {
@@ -376,6 +393,58 @@ func modelsWriteNestedMutationInputTypes(sb *strings.Builder, node schema.NodeDe
 	// DeleteFieldInput
 	sb.WriteString(fmt.Sprintf("type %sDeleteFieldInput struct {\n", prefix))
 	sb.WriteString(fmt.Sprintf("\tWhere %sWhere `json:\"where\"`\n", rel.ToNode))
+	sb.WriteString("}\n\n")
+}
+
+// modelsWriteMatchInput writes a {Node}MatchInput struct with all-pointer fields (all optional).
+// Excludes id and vector fields.
+func modelsWriteMatchInput(sb *strings.Builder, node schema.NodeDefinition, customScalars map[string]bool) {
+	sb.WriteString(fmt.Sprintf("type %sMatchInput struct {\n", node.Name))
+	for _, f := range node.Fields {
+		if f.IsID {
+			continue
+		}
+		if node.VectorField != nil && f.Name == node.VectorField.Name {
+			continue
+		}
+		modelsWriteField(sb, f, true, customScalars) // forceOptional = true
+	}
+	sb.WriteString("}\n\n")
+}
+
+// modelsWriteMergeInput writes a {Node}MergeInput struct.
+func modelsWriteMergeInput(sb *strings.Builder, node schema.NodeDefinition) {
+	sb.WriteString(fmt.Sprintf("type %sMergeInput struct {\n", node.Name))
+	sb.WriteString(fmt.Sprintf("\tMatch    *%sMatchInput  `json:\"match\"`\n", node.Name))
+	sb.WriteString(fmt.Sprintf("\tOnCreate *%sCreateInput `json:\"onCreate,omitempty\"`\n", node.Name))
+	sb.WriteString(fmt.Sprintf("\tOnMatch  *%sUpdateInput `json:\"onMatch,omitempty\"`\n", node.Name))
+	sb.WriteString("}\n\n")
+}
+
+// modelsWriteMergeMutationResponse writes the Merge{Nodes}MutationResponse struct.
+func modelsWriteMergeMutationResponse(sb *strings.Builder, node schema.NodeDefinition) {
+	plural := node.Name + "s"
+	sb.WriteString(fmt.Sprintf("type Merge%sMutationResponse struct {\n", plural))
+	sb.WriteString(fmt.Sprintf("\t%s []*%s `json:%q`\n", plural, node.Name, strutil.PluralLower(node.Name)))
+	sb.WriteString("}\n\n")
+}
+
+// modelsWriteConnectInput writes a Connect{Source}{Field}Input struct.
+func modelsWriteConnectInput(sb *strings.Builder, rel schema.RelationshipDefinition) {
+	inputName := "Connect" + rel.FromNode + strutil.Capitalize(rel.FieldName) + "Input"
+	sb.WriteString(fmt.Sprintf("type %s struct {\n", inputName))
+	sb.WriteString(fmt.Sprintf("\tFrom *%sWhere `json:\"from\"`\n", rel.FromNode))
+	sb.WriteString(fmt.Sprintf("\tTo   *%sWhere `json:\"to\"`\n", rel.ToNode))
+	if rel.Properties != nil {
+		sb.WriteString(fmt.Sprintf("\tEdge *%sCreateInput `json:\"edge,omitempty\"`\n", rel.Properties.TypeName))
+	}
+	sb.WriteString("}\n\n")
+}
+
+// modelsWriteConnectInfo writes the shared ConnectInfo struct (generated once).
+func modelsWriteConnectInfo(sb *strings.Builder) {
+	sb.WriteString("type ConnectInfo struct {\n")
+	sb.WriteString("\tRelationshipsCreated int `json:\"relationshipsCreated\"`\n")
 	sb.WriteString("}\n\n")
 }
 

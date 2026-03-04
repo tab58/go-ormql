@@ -135,7 +135,7 @@ func registryWriteRelationships(sb *strings.Builder, rels []schema.RelationshipD
 		sb.WriteString(fmt.Sprintf("\t\t\tRelType: %q,\n", r.RelType))
 		sb.WriteString(fmt.Sprintf("\t\t\tDirection: schema.Direction%s,\n", string(r.Direction)))
 		sb.WriteString(fmt.Sprintf("\t\t\tFromNode: %q,\n", r.FromNode))
-		sb.WriteString(fmt.Sprintf("\t\t\tToNode: %q,\n", r.ToNode))
+		sb.WriteString(fmt.Sprintf("\t\t\tToNode: %q, IsList: %t,\n", r.ToNode, r.IsList))
 		if r.Properties != nil {
 			sb.WriteString("\t\t\tProperties: &schema.PropertiesDefinition{\n")
 			sb.WriteString(fmt.Sprintf("\t\t\t\tTypeName: %q,\n", r.Properties.TypeName))

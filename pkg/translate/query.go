@@ -424,6 +424,57 @@ func findASTChild(val *ast.Value, name string) *ast.Value {
 	return nil
 }
 
+// appendProjectionReturn builds the projection for a mutation's return value and appends
+// it to sb. Handles both the case where a selection set is provided (builds full projection
+// with subqueries) and the fallback case (returns empty map). Closes the CALL block with " }".
+func (t *Translator) appendProjectionReturn(sb *strings.Builder, projSelSet ast.SelectionSet, node schema.NodeDefinition, alias string, scope *paramScope, errCtx string) error {
+	if projSelSet != nil {
+		fc := fieldContext{node: node, variable: "n", depth: 0}
+		proj, subqueries, err := t.buildProjection(projSelSet, fc, scope)
+		if err != nil {
+			return fmt.Errorf("%s projection: %w", errCtx, err)
+		}
+		for _, sq := range subqueries {
+			sb.WriteString(" ")
+			sb.WriteString(sq)
+		}
+		sb.WriteString(fmt.Sprintf(" RETURN collect(%s) AS %s", proj, alias))
+	} else {
+		sb.WriteString(fmt.Sprintf(" RETURN collect(n {}) AS %s", alias))
+	}
+	sb.WriteString(" }")
+	return nil
+}
+
+// findResponseSelectionSet finds the first child field with a non-empty SelectionSet
+// in a mutation response. Mutation responses contain a plural node field (e.g., "movies")
+// whose SelectionSet describes the projection for returned nodes.
+func findResponseSelectionSet(selSet ast.SelectionSet) ast.SelectionSet {
+	for _, sel := range selSet {
+		f, ok := sel.(*ast.Field)
+		if !ok {
+			continue
+		}
+		if len(f.SelectionSet) > 0 {
+			return f.SelectionSet
+		}
+	}
+	return nil
+}
+
+// resolveInputParam extracts the "input" argument from a field, resolves its value,
+// and registers it as a parameter. Returns the argument (for AST inspection), the
+// parameter name, and any error. Used by translateMergeField, translateConnectField,
+// translateCreateField, etc.
+func resolveInputParam(field *ast.Field, scope *paramScope) (*ast.Argument, string, error) {
+	inputArg := findArgument(field.Arguments, "input")
+	if inputArg == nil {
+		return nil, "", fmt.Errorf("missing 'input' argument for %q", field.Name)
+	}
+	param := scope.add(resolveValue(inputArg.Value, scope.variables))
+	return inputArg, param, nil
+}
+
 // buildFieldAssignments builds "variable.field = $param" assignment strings
 // from an ast.Value's children. Used for both WHERE predicates and SET clauses
 // in nested mutation operations.

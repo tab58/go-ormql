@@ -67,6 +67,7 @@ type PropertiesDefinition struct {
 }
 
 // RelationshipDefinition represents a field annotated with @relationship.
+// IsList is true when the field type is a list (e.g., [Actor!]!), false when singular (e.g., Actor!).
 type RelationshipDefinition struct {
 	FieldName  string
 	RelType    string
@@ -74,6 +75,7 @@ type RelationshipDefinition struct {
 	FromNode   string
 	ToNode     string
 	Properties *PropertiesDefinition
+	IsList     bool
 }
 
 // EnumDefinition represents a GraphQL enum type.

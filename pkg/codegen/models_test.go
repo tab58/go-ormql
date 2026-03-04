@@ -527,3 +527,98 @@ func TestModelsResolveGoType_NilScalars(t *testing.T) {
 		t.Errorf("with nil customScalars, expected original GoType, got %q", got)
 	}
 }
+
+// === CG-34: Merge/connect Go model struct tests ===
+
+// TestGenerateModels_MatchInput verifies that {Node}MatchInput structs are
+// generated with all-pointer fields (all optional), excluding id and vector.
+// Expected: MovieMatchInput with *string Title, *int Released — no ID field.
+func TestGenerateModels_MatchInput(t *testing.T) {
+	out, err := GenerateModels(fullModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "type MovieMatchInput struct") {
+		t.Errorf("missing MovieMatchInput struct:\n%s", src)
+	}
+	// All fields should be pointer types (optional)
+	if !strings.Contains(src, "*string") {
+		t.Errorf("MovieMatchInput should have pointer string fields:\n%s", src)
+	}
+}
+
+// TestGenerateModels_MergeInput verifies that {Node}MergeInput structs are
+// generated with Match, OnCreate, and OnMatch fields.
+// Expected: MovieMergeInput { Match *MovieMatchInput, OnCreate *MovieCreateInput, OnMatch *MovieUpdateInput }
+func TestGenerateModels_MergeInput(t *testing.T) {
+	out, err := GenerateModels(fullModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "type MovieMergeInput struct") {
+		t.Errorf("missing MovieMergeInput struct:\n%s", src)
+	}
+	if !strings.Contains(src, "MovieMatchInput") {
+		t.Errorf("MovieMergeInput should reference MovieMatchInput:\n%s", src)
+	}
+}
+
+// TestGenerateModels_MergeMutationResponse verifies that Merge{Nodes}MutationResponse
+// structs are generated following the same pattern as CreateMutationResponse.
+// Expected: MergeMoviesMutationResponse { Movies []*Movie }
+func TestGenerateModels_MergeMutationResponse(t *testing.T) {
+	out, err := GenerateModels(fullModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "type MergeMoviesMutationResponse struct") {
+		t.Errorf("missing MergeMoviesMutationResponse struct:\n%s", src)
+	}
+}
+
+// TestGenerateModels_ConnectInput verifies that Connect{Source}{Field}Input structs
+// are generated with From, To, and optional Edge fields.
+// Expected: ConnectMovieActorsInput { From *MovieWhere, To *ActorWhere, Edge *ActedInPropertiesCreateInput }
+func TestGenerateModels_ConnectInput(t *testing.T) {
+	out, err := GenerateModels(fullModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "type ConnectMovieActorsInput struct") {
+		t.Errorf("missing ConnectMovieActorsInput struct:\n%s", src)
+	}
+}
+
+// TestGenerateModels_ConnectInfo verifies that ConnectInfo is generated once
+// with RelationshipsCreated int field.
+// Expected: type ConnectInfo struct { RelationshipsCreated int }
+func TestGenerateModels_ConnectInfo(t *testing.T) {
+	out, err := GenerateModels(fullModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "type ConnectInfo struct") {
+		t.Errorf("missing ConnectInfo struct:\n%s", src)
+	}
+	if !strings.Contains(src, "RelationshipsCreated") {
+		t.Errorf("ConnectInfo missing RelationshipsCreated field:\n%s", src)
+	}
+}
+
+// TestGenerateModels_MergeConnectPassesGofmt verifies that generated code with
+// merge/connect types passes gofmt formatting.
+func TestGenerateModels_MergeConnectPassesGofmt(t *testing.T) {
+	out, err := GenerateModels(fullModel(), "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, fmtErr := format.Source(out)
+	if fmtErr != nil {
+		t.Errorf("generated models with merge/connect types do not pass gofmt: %v\n%s", fmtErr, string(out))
+	}
+}

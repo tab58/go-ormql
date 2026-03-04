@@ -638,3 +638,613 @@ func TestAugmentSchema_NodeWithNoRelationships_NoNestedInputs(t *testing.T) {
 		t.Errorf("augmented schema should not contain 'FieldInput' for a model with no relationships:\n%s", sdl)
 	}
 }
+
+// === CG-31: Merge mutation type tests ===
+
+// TestAugmentSchema_MergeMatchInput verifies that the augmented schema contains
+// {Node}MatchInput with all scalar fields except id and vector, all optional.
+// Expected: MovieMatchInput with title and released fields (no id).
+func TestAugmentSchema_MergeMatchInput(t *testing.T) {
+	sdl, err := AugmentSchema(movieModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	if !strings.Contains(sdl, "MovieMatchInput") {
+		t.Fatalf("augmented schema missing 'MovieMatchInput':\n%s", sdl)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	matchInput := s.Types["MovieMatchInput"]
+	if matchInput == nil {
+		t.Fatal("MovieMatchInput type not found in parsed schema")
+	}
+
+	fieldNames := map[string]bool{}
+	for _, f := range matchInput.Fields {
+		fieldNames[f.Name] = true
+	}
+
+	// id should be excluded (auto-generated via randomUUID())
+	if fieldNames["id"] {
+		t.Error("MovieMatchInput contains 'id' — id should be excluded from MatchInput")
+	}
+	// title should be included (optional)
+	if !fieldNames["title"] {
+		t.Error("MovieMatchInput missing 'title' field")
+	}
+	// released should be included (optional)
+	if !fieldNames["released"] {
+		t.Error("MovieMatchInput missing 'released' field")
+	}
+
+	// All fields should be optional (nullable) — check that title is nullable
+	for _, f := range matchInput.Fields {
+		if f.Name == "title" && f.Type.NonNull {
+			t.Error("MovieMatchInput.title should be optional (not NonNull)")
+		}
+	}
+}
+
+// TestAugmentSchema_MergeMatchInputExcludesVector verifies that vector fields
+// are excluded from MatchInput, similar to id.
+// Expected: MovieMatchInput does not contain the vector field.
+func TestAugmentSchema_MergeMatchInputExcludesVector(t *testing.T) {
+	model := movieModel()
+	model.Nodes[0].VectorField = &schema.VectorFieldDefinition{
+		Name: "embedding", IndexName: "movie_embed", Dimensions: 1536, Similarity: "cosine",
+	}
+	model.Nodes[0].Fields = append(model.Nodes[0].Fields, schema.FieldDefinition{
+		Name: "embedding", GraphQLType: "[Float!]!", GoType: "[]float64", CypherType: "LIST<FLOAT>", IsList: true,
+	})
+
+	sdl, err := AugmentSchema(model)
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	matchInput := s.Types["MovieMatchInput"]
+	if matchInput == nil {
+		t.Fatal("MovieMatchInput type not found in parsed schema")
+	}
+
+	for _, f := range matchInput.Fields {
+		if f.Name == "embedding" {
+			t.Error("MovieMatchInput contains 'embedding' — vector fields should be excluded")
+		}
+	}
+}
+
+// TestAugmentSchema_MergeMergeInput verifies that {Node}MergeInput is generated
+// with match (required), onCreate (optional), and onMatch (optional) fields.
+// Expected: MovieMergeInput with correct field types.
+func TestAugmentSchema_MergeMergeInput(t *testing.T) {
+	sdl, err := AugmentSchema(movieModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	if !strings.Contains(sdl, "MovieMergeInput") {
+		t.Fatalf("augmented schema missing 'MovieMergeInput':\n%s", sdl)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	mergeInput := s.Types["MovieMergeInput"]
+	if mergeInput == nil {
+		t.Fatal("MovieMergeInput type not found in parsed schema")
+	}
+
+	fieldNames := map[string]bool{}
+	for _, f := range mergeInput.Fields {
+		fieldNames[f.Name] = true
+	}
+	if !fieldNames["match"] {
+		t.Error("MovieMergeInput missing 'match' field")
+	}
+	if !fieldNames["onCreate"] {
+		t.Error("MovieMergeInput missing 'onCreate' field")
+	}
+	if !fieldNames["onMatch"] {
+		t.Error("MovieMergeInput missing 'onMatch' field")
+	}
+
+	// match should be required (NonNull)
+	for _, f := range mergeInput.Fields {
+		if f.Name == "match" && !f.Type.NonNull {
+			t.Error("MovieMergeInput.match should be required (NonNull)")
+		}
+	}
+}
+
+// TestAugmentSchema_MergeMutationResponse verifies that Merge{Nodes}MutationResponse
+// is generated with the plural node list field.
+// Expected: MergeMoviesMutationResponse { movies: [Movie!]! }
+func TestAugmentSchema_MergeMutationResponse(t *testing.T) {
+	sdl, err := AugmentSchema(movieModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	if !strings.Contains(sdl, "MergeMoviesMutationResponse") {
+		t.Fatalf("augmented schema missing 'MergeMoviesMutationResponse':\n%s", sdl)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	response := s.Types["MergeMoviesMutationResponse"]
+	if response == nil {
+		t.Fatal("MergeMoviesMutationResponse type not found in parsed schema")
+	}
+
+	fieldNames := map[string]bool{}
+	for _, f := range response.Fields {
+		fieldNames[f.Name] = true
+	}
+	if !fieldNames["movies"] {
+		t.Error("MergeMoviesMutationResponse missing 'movies' field")
+	}
+}
+
+// TestAugmentSchema_MergeMutation verifies that the mergeMovies mutation is
+// generated in the Mutation type with correct input and return types.
+// Expected: mergeMovies(input: [MovieMergeInput!]!): MergeMoviesMutationResponse!
+func TestAugmentSchema_MergeMutation(t *testing.T) {
+	sdl, err := AugmentSchema(movieModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	if !strings.Contains(sdl, "mergeMovies") {
+		t.Fatalf("augmented schema missing 'mergeMovies' mutation:\n%s", sdl)
+	}
+	if !strings.Contains(sdl, "MergeMoviesMutationResponse") {
+		t.Error("augmented schema missing 'MergeMoviesMutationResponse' return type")
+	}
+}
+
+// TestAugmentSchema_MergeTypesMultiNode verifies that merge types are generated
+// for each @node type in a multi-node model.
+// Expected: MovieMatchInput, ActorMatchInput, mergeMovies, mergeActors
+func TestAugmentSchema_MergeTypesMultiNode(t *testing.T) {
+	sdl, err := AugmentSchema(multiNodeModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	for _, want := range []string{
+		"MovieMatchInput", "MovieMergeInput", "MergeMoviesMutationResponse", "mergeMovies",
+		"ActorMatchInput", "ActorMergeInput", "MergeActorsMutationResponse", "mergeActors",
+	} {
+		if !strings.Contains(sdl, want) {
+			t.Errorf("augmented schema missing merge artifact %q", want)
+		}
+	}
+}
+
+// TestAugmentSchema_MergeTypesValidSDL verifies that the augmented schema with
+// merge types is valid GraphQL SDL (parses without error).
+func TestAugmentSchema_MergeTypesValidSDL(t *testing.T) {
+	sdl, err := AugmentSchema(movieModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	_, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema with merge types failed gqlparser validation: %v\nSDL:\n%s", parseErr, sdl)
+	}
+}
+
+// TestAugmentSchema_MergeMatchInputOnlyIDNode verifies that a node with only an
+// ID! field produces an empty MatchInput (id is excluded).
+// Expected: MovieMatchInput with _empty: String placeholder.
+func TestAugmentSchema_MergeMatchInputOnlyIDNode(t *testing.T) {
+	model := schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{
+				Name:   "Movie",
+				Labels: []string{"Movie"},
+				Fields: []schema.FieldDefinition{
+					{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+				},
+			},
+		},
+	}
+
+	sdl, err := AugmentSchema(model)
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	if !strings.Contains(sdl, "MovieMatchInput") {
+		t.Fatalf("augmented schema missing 'MovieMatchInput' for id-only node:\n%s", sdl)
+	}
+}
+
+// === CG-32: Connect mutation type tests ===
+
+// TestAugmentSchema_ConnectInputWithProperties verifies that for a relationship
+// with @relationshipProperties, the Connect{Source}{Field}Input is generated
+// with from, to, and edge fields.
+// Expected: ConnectMovieActorsInput { from: MovieWhere!, to: ActorWhere!, edge: ActedInPropertiesCreateInput }
+func TestAugmentSchema_ConnectInputWithProperties(t *testing.T) {
+	sdl, err := AugmentSchema(modelWithRelationshipProperties())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	if !strings.Contains(sdl, "ConnectMovieActorsInput") {
+		t.Fatalf("augmented schema missing 'ConnectMovieActorsInput':\n%s", sdl)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	connectInput := s.Types["ConnectMovieActorsInput"]
+	if connectInput == nil {
+		t.Fatal("ConnectMovieActorsInput type not found in parsed schema")
+	}
+
+	fieldNames := map[string]bool{}
+	for _, f := range connectInput.Fields {
+		fieldNames[f.Name] = true
+	}
+	if !fieldNames["from"] {
+		t.Error("ConnectMovieActorsInput missing 'from' field")
+	}
+	if !fieldNames["to"] {
+		t.Error("ConnectMovieActorsInput missing 'to' field")
+	}
+	if !fieldNames["edge"] {
+		t.Error("ConnectMovieActorsInput missing 'edge' field — should be present for relationships with @relationshipProperties")
+	}
+}
+
+// TestAugmentSchema_ConnectInputWithoutProperties verifies that for a relationship
+// without @relationshipProperties, the edge field is omitted.
+// Expected: ConnectMovieCategoriesInput { from: MovieWhere!, to: CategoryWhere! } — no edge.
+func TestAugmentSchema_ConnectInputWithoutProperties(t *testing.T) {
+	sdl, err := AugmentSchema(modelWithRelationshipNoProperties())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	if !strings.Contains(sdl, "ConnectMovieCategoriesInput") {
+		t.Fatalf("augmented schema missing 'ConnectMovieCategoriesInput':\n%s", sdl)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	connectInput := s.Types["ConnectMovieCategoriesInput"]
+	if connectInput == nil {
+		t.Fatal("ConnectMovieCategoriesInput not found in parsed schema")
+	}
+
+	fieldNames := map[string]bool{}
+	for _, f := range connectInput.Fields {
+		fieldNames[f.Name] = true
+	}
+	if !fieldNames["from"] {
+		t.Error("ConnectMovieCategoriesInput missing 'from' field")
+	}
+	if !fieldNames["to"] {
+		t.Error("ConnectMovieCategoriesInput missing 'to' field")
+	}
+	if fieldNames["edge"] {
+		t.Error("ConnectMovieCategoriesInput has 'edge' field — should be absent without @relationshipProperties")
+	}
+}
+
+// TestAugmentSchema_ConnectMutation verifies that the connectMovieActors mutation
+// is generated in the Mutation type.
+// Expected: connectMovieActors(input: [ConnectMovieActorsInput!]!): ConnectInfo!
+func TestAugmentSchema_ConnectMutation(t *testing.T) {
+	sdl, err := AugmentSchema(modelWithRelationshipProperties())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	if !strings.Contains(sdl, "connectMovieActors") {
+		t.Fatalf("augmented schema missing 'connectMovieActors' mutation:\n%s", sdl)
+	}
+	if !strings.Contains(sdl, "ConnectInfo") {
+		t.Error("augmented schema missing 'ConnectInfo' return type")
+	}
+}
+
+// TestAugmentSchema_ConnectInfoSharedType verifies that ConnectInfo is a shared type
+// generated once, not duplicated per relationship.
+// Expected: exactly one occurrence of "type ConnectInfo".
+func TestAugmentSchema_ConnectInfoSharedType(t *testing.T) {
+	// Model with two relationships
+	model := schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{Name: "Movie", Labels: []string{"Movie"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+				{Name: "title", GraphQLType: "String!"},
+			}},
+			{Name: "Actor", Labels: []string{"Actor"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+				{Name: "name", GraphQLType: "String!"},
+			}},
+			{Name: "Director", Labels: []string{"Director"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+				{Name: "name", GraphQLType: "String!"},
+			}},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			{FieldName: "actors", RelType: "ACTED_IN", Direction: schema.DirectionIN, FromNode: "Movie", ToNode: "Actor", IsList: true},
+			{FieldName: "directors", RelType: "DIRECTED", Direction: schema.DirectionIN, FromNode: "Movie", ToNode: "Director", IsList: true},
+		},
+	}
+
+	sdl, err := AugmentSchema(model)
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	count := strings.Count(sdl, "type ConnectInfo")
+	if count != 1 {
+		t.Errorf("'type ConnectInfo' appears %d times, want exactly 1:\n%s", count, sdl)
+	}
+}
+
+// TestAugmentSchema_ConnectMutationPerRelationship verifies that each relationship
+// gets its own connect mutation.
+// Expected: connectMovieActors and connectMovieDirectors both present.
+func TestAugmentSchema_ConnectMutationPerRelationship(t *testing.T) {
+	model := schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{Name: "Movie", Labels: []string{"Movie"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+				{Name: "title", GraphQLType: "String!"},
+			}},
+			{Name: "Actor", Labels: []string{"Actor"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+				{Name: "name", GraphQLType: "String!"},
+			}},
+			{Name: "Director", Labels: []string{"Director"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+				{Name: "name", GraphQLType: "String!"},
+			}},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			{FieldName: "actors", RelType: "ACTED_IN", Direction: schema.DirectionIN, FromNode: "Movie", ToNode: "Actor", IsList: true},
+			{FieldName: "directors", RelType: "DIRECTED", Direction: schema.DirectionIN, FromNode: "Movie", ToNode: "Director", IsList: true},
+		},
+	}
+
+	sdl, err := AugmentSchema(model)
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	if !strings.Contains(sdl, "connectMovieActors") {
+		t.Error("augmented schema missing 'connectMovieActors' mutation")
+	}
+	if !strings.Contains(sdl, "connectMovieDirectors") {
+		t.Error("augmented schema missing 'connectMovieDirectors' mutation")
+	}
+}
+
+// TestAugmentSchema_ConnectTypesValidSDL verifies that the augmented schema with
+// connect types is valid GraphQL SDL.
+func TestAugmentSchema_ConnectTypesValidSDL(t *testing.T) {
+	sdl, err := AugmentSchema(modelWithRelationshipProperties())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+	_, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema with connect types failed gqlparser validation: %v\nSDL:\n%s", parseErr, sdl)
+	}
+}
+
+// === CG-33: Relationship WHERE filter field tests ===
+
+// relWhereModel returns a GraphModel with to-one and to-many relationships for
+// testing relationship-based WHERE filters.
+func relWhereModel() schema.GraphModel {
+	return schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{Name: "Movie", Labels: []string{"Movie"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+				{Name: "title", GraphQLType: "String!", GoType: "string", CypherType: "STRING"},
+			}},
+			{Name: "Actor", Labels: []string{"Actor"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+				{Name: "name", GraphQLType: "String!", GoType: "string", CypherType: "STRING"},
+			}},
+			{Name: "Repository", Labels: []string{"Repository"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", GoType: "string", CypherType: "STRING", IsID: true},
+				{Name: "name", GraphQLType: "String!", GoType: "string", CypherType: "STRING"},
+			}},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			// to-many: Movie.actors → [Actor!]!
+			{FieldName: "actors", RelType: "ACTED_IN", Direction: schema.DirectionIN, FromNode: "Movie", ToNode: "Actor", IsList: true},
+			// to-one: Movie.repository → Repository!
+			{FieldName: "repository", RelType: "BELONGS_TO", Direction: schema.DirectionOUT, FromNode: "Movie", ToNode: "Repository", IsList: false},
+		},
+	}
+}
+
+// TestAugmentSchema_RelWhereToMany verifies that a to-many relationship adds
+// a {fieldName}_some filter field to the Where input.
+// Expected: MovieWhere has actors_some: ActorWhere
+func TestAugmentSchema_RelWhereToMany(t *testing.T) {
+	sdl, err := AugmentSchema(relWhereModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	movieWhere := s.Types["MovieWhere"]
+	if movieWhere == nil {
+		t.Fatal("MovieWhere type not found in parsed schema")
+	}
+
+	fieldNames := map[string]bool{}
+	for _, f := range movieWhere.Fields {
+		fieldNames[f.Name] = true
+	}
+	if !fieldNames["actors_some"] {
+		t.Errorf("MovieWhere missing 'actors_some' field for to-many relationship filter")
+	}
+}
+
+// TestAugmentSchema_RelWhereToOne verifies that a to-one relationship adds
+// a {fieldName} filter field (no suffix) to the Where input.
+// Expected: MovieWhere has repository: RepositoryWhere
+func TestAugmentSchema_RelWhereToOne(t *testing.T) {
+	sdl, err := AugmentSchema(relWhereModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	movieWhere := s.Types["MovieWhere"]
+	if movieWhere == nil {
+		t.Fatal("MovieWhere type not found in parsed schema")
+	}
+
+	fieldNames := map[string]bool{}
+	for _, f := range movieWhere.Fields {
+		fieldNames[f.Name] = true
+	}
+	if !fieldNames["repository"] {
+		t.Errorf("MovieWhere missing 'repository' field for to-one relationship filter")
+	}
+}
+
+// TestAugmentSchema_RelWhereDepthCap verifies that relationship WHERE filters
+// are depth-limited at 3 levels to prevent infinite recursion.
+// At depth 3, the Where type should omit relationship filter fields.
+func TestAugmentSchema_RelWhereDepthCap(t *testing.T) {
+	// Chain: A -> B -> C -> D (depth 3 from A)
+	model := schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{Name: "A", Labels: []string{"A"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+			}},
+			{Name: "B", Labels: []string{"B"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+			}},
+			{Name: "C", Labels: []string{"C"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+			}},
+			{Name: "D", Labels: []string{"D"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+			}},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			{FieldName: "bs", RelType: "HAS_B", Direction: schema.DirectionOUT, FromNode: "A", ToNode: "B", IsList: true},
+			{FieldName: "cs", RelType: "HAS_C", Direction: schema.DirectionOUT, FromNode: "B", ToNode: "C", IsList: true},
+			{FieldName: "ds", RelType: "HAS_D", Direction: schema.DirectionOUT, FromNode: "C", ToNode: "D", IsList: true},
+		},
+	}
+
+	sdl, err := AugmentSchema(model)
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	// The schema must parse without infinite recursion
+	_, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse (infinite recursion?): %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	// Verify that relationship filter fields exist at lower levels
+	if !strings.Contains(sdl, "bs_some") {
+		t.Error("AugmentSchema missing 'bs_some' relationship filter on AWhere")
+	}
+}
+
+// TestAugmentSchema_RelWhereSelfReferencing verifies that self-referencing
+// relationships respect the depth cap and don't cause infinite recursion.
+func TestAugmentSchema_RelWhereSelfReferencing(t *testing.T) {
+	model := schema.GraphModel{
+		Nodes: []schema.NodeDefinition{
+			{Name: "Folder", Labels: []string{"Folder"}, Fields: []schema.FieldDefinition{
+				{Name: "id", GraphQLType: "ID!", IsID: true},
+				{Name: "name", GraphQLType: "String!"},
+			}},
+		},
+		Relationships: []schema.RelationshipDefinition{
+			{FieldName: "subfolders", RelType: "CONTAINS", Direction: schema.DirectionOUT, FromNode: "Folder", ToNode: "Folder", IsList: true},
+		},
+	}
+
+	sdl, err := AugmentSchema(model)
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	// Must not infinite-recurse
+	_, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema with self-referencing relationship failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	// Should have subfolders_some at the first level
+	if !strings.Contains(sdl, "subfolders_some") {
+		t.Error("AugmentSchema missing 'subfolders_some' relationship filter on FolderWhere")
+	}
+}
+
+// TestAugmentSchema_RelWhereBothStylesCoexist verifies that to-one and to-many
+// filter styles coexist in the same Where input.
+func TestAugmentSchema_RelWhereBothStylesCoexist(t *testing.T) {
+	sdl, err := AugmentSchema(relWhereModel())
+	if err != nil {
+		t.Fatalf("AugmentSchema returned error: %v", err)
+	}
+
+	s, parseErr := parseSDL(sdl)
+	if parseErr != nil {
+		t.Fatalf("augmented schema failed parse: %v\nSDL:\n%s", parseErr, sdl)
+	}
+
+	movieWhere := s.Types["MovieWhere"]
+	if movieWhere == nil {
+		t.Fatal("MovieWhere type not found")
+	}
+
+	fieldNames := map[string]bool{}
+	for _, f := range movieWhere.Fields {
+		fieldNames[f.Name] = true
+	}
+
+	// Both to-one (repository) and to-many (actors_some) should coexist
+	if !fieldNames["actors_some"] {
+		t.Error("MovieWhere missing 'actors_some' (to-many)")
+	}
+	if !fieldNames["repository"] {
+		t.Error("MovieWhere missing 'repository' (to-one)")
+	}
+	// AND/OR/NOT should still be present
+	if !fieldNames["AND"] {
+		t.Error("MovieWhere missing 'AND' boolean composition")
+	}
+}
