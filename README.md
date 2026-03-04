@@ -2,14 +2,17 @@
 
 A Go code generator that bridges GraphQL and graph databases. Write an annotated `.graphql` schema, run `gormql generate`, and get a type-safe Go client that translates GraphQL operations into optimized Cypher queries — one database round-trip per operation, regardless of nesting depth.
 
-Built for Go developers working with Neo4j (or any Cypher-compatible database). Inspired by [`@neo4j/graphql`](https://neo4j.com/docs/graphql/current/) but using compile-time code generation instead of runtime schema construction.
+Built for Go developers working with Neo4j, FalkorDB, or any Cypher-compatible database. Inspired by [`@neo4j/graphql`](https://neo4j.com/docs/graphql/current/) but using compile-time code generation instead of runtime schema construction.
 
 ## Features
 
 - **Single-roundtrip execution** — every GraphQL query or mutation becomes exactly one Cypher query using CALL subqueries and map projections
 - **Schema-first** — the `.graphql` schema with directives is the single source of truth
 - **Full CRUD** — auto-generated queries and mutations for all node types
+- **Merge (upsert)** — atomic create-or-update via Cypher `MERGE` with `ON CREATE SET` / `ON MATCH SET`
+- **Top-level connect** — standalone mutations to create relationships between existing nodes
 - **Advanced filtering** — 14 operators (comparison, string, list, null, regex) with AND/OR/NOT boolean composition
+- **Relationship filters** — filter nodes by related node properties (e.g., find actors who acted in a specific movie)
 - **Multi-field sorting** — ASC/DESC on any scalar field
 - **Relay connections** — cursor-based pagination at root level and on relationships, with `totalCount` and `pageInfo`
 - **Nested mutations** — create, connect, disconnect, update, and delete related nodes in a single operation
@@ -19,13 +22,13 @@ Built for Go developers working with Neo4j (or any Cypher-compatible database). 
 - **GraphQL variables** — full support for parameterized queries and mutations
 - **Type-safe results** — `Result.Decode()` unmarshals into generated Go structs
 - **Debug logging** — optional `log/slog` integration for GraphQL and Cypher query visibility
-- **Driver-agnostic** — abstract driver interface with Neo4j as the first implementation
+- **Multi-database** — Neo4j and FalkorDB drivers included, with an abstract interface for others
 
 ## Requirements
 
 - Go 1.24+
-- Neo4j 4.1+ (required for CALL subqueries)
-- Neo4j 5.11+ (required for `@vector` similarity queries)
+- **Neo4j** 4.1+ (required for CALL subqueries), 5.11+ for `@vector` similarity queries
+- **FalkorDB** 4.0+ (required for CALL subqueries), 4.2+ for `@vector` similarity queries
 
 ## Installation
 
@@ -77,6 +80,16 @@ gormql generate \
   --package generated
 ```
 
+For FalkorDB, add `--target falkordb`:
+
+```bash
+gormql generate \
+  --schema schema.graphql \
+  --output ./generated \
+  --package generated \
+  --target falkordb
+```
+
 This produces 4 files (5 when `@vector` is present):
 
 | File | Purpose |
@@ -106,7 +119,9 @@ func main() {
     ctx := context.Background()
 
     drv, err := neo4j.NewNeo4jDriver(driver.Config{
-        URI:      "bolt://localhost:7687",
+        Host:     "localhost",
+        Port:     7687,
+        Scheme:   "bolt",
         Username: "neo4j",
         Password: "password",
     })
@@ -169,18 +184,18 @@ type Actor @node {
 ```
 
 Arguments:
-- `type` (required) — the Neo4j relationship type (e.g., `"ACTED_IN"`)
+- `type` (required) — the relationship type in the database (e.g., `"ACTED_IN"`)
 - `direction` (required) — `IN` or `OUT`, relative to the declaring node (see below)
 - `properties` (optional) — name of a `@relationshipProperties` type for edge data
 
 #### Understanding `direction`
 
-The `direction` argument describes which way the Neo4j relationship arrow points **from the perspective of the node type that declares the field**:
+The `direction` argument describes which way the relationship arrow points **from the perspective of the node type that declares the field**:
 
 - **`OUT`** — the arrow points **away from** the declaring node: `(DeclaringNode)-[:REL]->(TargetNode)`
 - **`IN`** — the arrow points **into** the declaring node: `(DeclaringNode)<-[:REL]-(TargetNode)`
 
-For example, given the Neo4j relationship `(Actor)-[:ACTED_IN]->(Movie)`, you can declare the same edge from either side:
+For example, given the relationship `(Actor)-[:ACTED_IN]->(Movie)`, you can declare the same edge from either side:
 
 ```graphql
 # From Actor's perspective: the arrow goes OUT of Actor toward Movie
@@ -194,7 +209,7 @@ type Movie @node {
 }
 ```
 
-Both declarations describe the same physical Neo4j edge. The generated Cypher uses the direction to place the arrow correctly:
+Both declarations describe the same physical edge. The generated Cypher uses the direction to place the arrow correctly:
 
 | Declaration | Generated Cypher pattern |
 |-------------|--------------------------|
@@ -239,7 +254,7 @@ type Movie @node {
 
 ### `@vector`
 
-Enables similarity search on a node field backed by a Neo4j vector index. The field must be of type `[Float!]!`. At most one `@vector` field per `@node` type.
+Enables similarity search on a node field backed by a vector index. The field must be of type `[Float!]!`. At most one `@vector` field per `@node` type.
 
 ```graphql
 type Movie @node {
@@ -250,14 +265,31 @@ type Movie @node {
 ```
 
 Arguments:
-- `indexName` (required) — the Neo4j vector index name
+- `indexName` (required) — the vector index name
 - `dimensions` (required) — vector dimensionality
 - `similarity` (required) — similarity function (`"cosine"`, `"euclidean"`)
 
 When `@vector` is present, the generator produces:
 - A `moviesSimilar(embedding: [Float!]!, first: Int): [MovieSimilarResult!]!` query
 - A `MovieSimilarResult` type with a `score` field and the node fields
-- An `indexes_gen.go` file with `CreateIndexes(ctx, drv)` that runs `CREATE VECTOR INDEX IF NOT EXISTS` DDL
+- An `indexes_gen.go` file with `CreateIndexes(ctx, drv)` that runs the appropriate `CREATE VECTOR INDEX` DDL for your target database
+
+```go
+// Create vector indexes before first use
+if err := generated.CreateIndexes(ctx, drv); err != nil {
+    log.Fatal(err)
+}
+
+// Search for similar movies by embedding vector
+result, _ := c.Execute(ctx, `
+    query {
+        moviesSimilar(embedding: [0.1, 0.2, ...], first: 10) {
+            score
+            title
+        }
+    }
+`, nil)
+```
 
 ## Auto-Generated API
 
@@ -271,8 +303,12 @@ For each `@node` type (e.g., `Movie`), the generator creates:
 - `createMovies(input: [MovieCreateInput!]!): CreateMoviesMutationResponse!`
 - `updateMovies(where: MovieWhere, update: MovieUpdateInput): UpdateMoviesMutationResponse!`
 - `deleteMovies(where: MovieWhere): DeleteInfo!`
+- `mergeMovies(input: [MovieMergeInput!]!): MergeMoviesMutationResponse!`
 
-**Input types:** `MovieCreateInput`, `MovieUpdateInput`, `MovieWhere`, `MovieSort`, and nested mutation input types for each relationship.
+**Per-relationship connect mutations** (e.g., for an `Actor` with a `movies` relationship field):
+- `connectActorMovies(input: [ConnectActorMoviesInput!]!): ConnectInfo!`
+
+**Input types:** `MovieCreateInput`, `MovieUpdateInput`, `MovieWhere`, `MovieSort`, `MovieMatchInput`, `MovieMergeInput`, and nested mutation input types for each relationship.
 
 **Connection types:** `MoviesConnection`, `MovieEdge`, `PageInfo`, and relationship-level connection types (e.g., `MovieActorsConnection`, `MovieActorsEdge`).
 
@@ -335,6 +371,38 @@ result, _ := c.Execute(ctx, `
             ]
             released_gte: 1990
             NOT: { title_contains: "Reloaded" }
+        }) {
+            title
+        }
+    }
+`, nil)
+```
+
+### Relationship Filters
+
+Filter nodes by properties of their related nodes. For to-many relationships, use the `_some` suffix. For to-one relationships, use the field name directly.
+
+```go
+// Find actors who acted in a movie titled "The Matrix"
+result, _ := c.Execute(ctx, `
+    query {
+        actors(where: {
+            movies_some: { title: "The Matrix" }
+        }) {
+            name
+        }
+    }
+`, nil)
+```
+
+Relationship filters support the full set of scalar operators and can be nested:
+
+```go
+// Find movies where at least one actor's name starts with "Keanu"
+result, _ := c.Execute(ctx, `
+    query {
+        movies(where: {
+            actors_some: { name_startsWith: "Keanu" }
         }) {
             title
         }
@@ -418,7 +486,7 @@ All argument positions support variables — filters, pagination, sort, mutation
 
 ```go
 result, _ := c.Execute(ctx, `
-    query($search: String!, $minYear: Int, $limit: Int!) {
+    query($search: String!, $minYear: Int) {
         movies(
             where: { title_contains: $search, released_gte: $minYear }
             sort: [{ released: DESC }]
@@ -429,7 +497,6 @@ result, _ := c.Execute(ctx, `
 `, map[string]any{
     "search":  "Matrix",
     "minYear": 1999,
-    "limit":   20,
 })
 ```
 
@@ -478,6 +545,58 @@ result, _ := c.Execute(ctx, `
     }
 `, nil)
 ```
+
+### Merge (Upsert)
+
+Merge mutations use Cypher `MERGE` to atomically create-or-update nodes. The `match` fields identify the node; `onCreate` sets values only on creation; `onMatch` updates values only when the node already exists.
+
+```go
+result, _ := c.Execute(ctx, `
+    mutation {
+        mergeMovies(input: [
+            {
+                match: { title: "The Matrix" }
+                onCreate: { title: "The Matrix", released: 1999 }
+                onMatch: { released: 1999 }
+            }
+        ]) {
+            movies { id title released }
+        }
+    }
+`, nil)
+```
+
+- `match` — the identity fields used to find or create the node (all non-ID, non-vector scalar fields)
+- `onCreate` — set these fields only when creating a new node (IDs are auto-generated with `randomUUID()`)
+- `onMatch` — update these fields only when the node already exists (uses `COALESCE` to preserve existing values when a field is null)
+- Batched with `UNWIND` — pass multiple items in the input array for efficient bulk upserts
+
+### Top-Level Connect
+
+Create relationships between existing nodes without modifying the nodes themselves. The mutation name follows the pattern `connect{SourceType}{FieldName}`:
+
+```go
+// Connect existing actors to existing movies
+result, _ := c.Execute(ctx, `
+    mutation {
+        connectActorMovies(input: [
+            {
+                from: { name: "Keanu Reeves" }
+                to: { title: "The Matrix" }
+                edge: { role: "Neo" }
+            }
+        ]) {
+            relationshipsCreated
+        }
+    }
+`, nil)
+```
+
+- `from` — WHERE filter to match the source node
+- `to` — WHERE filter to match the target node
+- `edge` — optional relationship properties (only when `@relationshipProperties` is defined)
+- Uses `MERGE` — safe to call multiple times without creating duplicate relationships
+- Batched with `UNWIND` — pass multiple items for bulk relationship creation
 
 ### Nested Mutations
 
@@ -563,6 +682,77 @@ first := movies[0].(map[string]any)
 fmt.Println(first["title"])
 ```
 
+## Database Drivers
+
+### Neo4j
+
+```go
+import (
+    "github.com/tab58/go-ormql/pkg/driver"
+    "github.com/tab58/go-ormql/pkg/driver/neo4j"
+)
+
+drv, err := neo4j.NewNeo4jDriver(driver.Config{
+    Host:     "localhost",
+    Port:     7687,
+    Scheme:   "bolt",
+    Username: "neo4j",
+    Password: "password",
+    Database: "neo4j",  // optional, defaults to "neo4j"
+})
+```
+
+Supported schemes: `bolt`, `bolt+s`, `bolt+ssc`, `neo4j`, `neo4j+s`, `neo4j+ssc`.
+
+### FalkorDB
+
+```go
+import (
+    "github.com/tab58/go-ormql/pkg/driver"
+    "github.com/tab58/go-ormql/pkg/driver/falkordb"
+)
+
+drv, err := falkordb.NewFalkorDBDriver(driver.Config{
+    Host:     "localhost",
+    Port:     6379,
+    Scheme:   "redis",
+    Username: "default",
+    Password: "password",
+    Database: "mygraph",  // required: the FalkorDB graph name
+})
+```
+
+Supported schemes: `redis`, `rediss`.
+
+When using `@vector` with FalkorDB, the generated `indexes_gen.go` exports a `VectorIndexes` variable. Pass it to the driver config for automatic vector query rewriting:
+
+```go
+drv, err := falkordb.NewFalkorDBDriver(driver.Config{
+    Host:          "localhost",
+    Port:          6379,
+    Scheme:        "redis",
+    Database:      "mygraph",
+    VectorIndexes: generated.VectorIndexes,
+})
+```
+
+### Driver Config
+
+Both drivers use the same `driver.Config` struct:
+
+```go
+type Config struct {
+    Host     string       // database host (required)
+    Port     int          // database port (required)
+    Scheme   string       // connection scheme (required, varies by driver)
+    Username string       // authentication username
+    Password string       // authentication password
+    Database string       // database/graph name
+    Logger   *slog.Logger // optional debug logging
+    VectorIndexes map[string]driver.VectorIndex // FalkorDB vector query rewriting
+}
+```
+
 ## Debug Logging
 
 Enable debug logging with `log/slog` to see both the GraphQL query and the generated Cypher:
@@ -580,7 +770,9 @@ logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 
 // Pass logger to both driver and client
 drv, _ := neo4j.NewNeo4jDriver(driver.Config{
-    URI:      "bolt://localhost:7687",
+    Host:     "localhost",
+    Port:     7687,
+    Scheme:   "bolt",
     Username: "neo4j",
     Password: "password",
     Logger:   logger,
@@ -591,40 +783,57 @@ c := generated.NewClient(drv, client.WithLogger(logger))
 
 This logs `graphql.execute` (with query and variables) at the client level and `cypher.execute` (with the Cypher query and parameters) at the driver level. When no logger is set, there is zero overhead.
 
+## CLI Reference
+
+```
+gormql generate [flags]
+```
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--schema` | yes | | Comma-separated `.graphql` schema file paths |
+| `--output` | yes | | Output directory for generated code |
+| `--package` | no | `generated` | Go package name for generated files |
+| `--target` | no | `neo4j` | Target database: `neo4j` or `falkordb` |
+
+The `--target` flag affects index DDL generation. When using `@vector`:
+- `neo4j` generates `CREATE VECTOR INDEX IF NOT EXISTS` statements
+- `falkordb` generates FalkorDB-specific vector index DDL and exports a `VectorIndexes` variable for driver configuration
+
 ## Architecture
 
 ```
 schema.graphql (user input)
-        │
-        ▼
+        |
+        v
   gormql generate             Build time
-  ┌──────────────────────┐
-  │ 1. Parse schema      │
-  │ 2. Augment CRUD      │
-  │ 3. Gen models        │
-  │ 4. Gen registry      │
-  │ 5. Gen client        │
-  │ 6. Gen indexes       │
-  │    (@vector only)    │
-  └──────────┬───────────┘
-             │
-             ▼
+  +----------------------+
+  | 1. Parse schema      |
+  | 2. Augment CRUD      |
+  | 3. Gen models        |
+  | 4. Gen registry      |
+  | 5. Gen client        |
+  | 6. Gen indexes       |
+  |    (@vector only)    |
+  +----------+-----------+
+             |
+             v
   generated/ (4-5 Go files)
-           │
-           │                  Runtime
-           ▼
+           |
+           |                  Runtime
+           v
   client.Execute(ctx, query, vars)
-           │
-           ▼
+           |
+           v
   gqlparser: parse + validate
-           │
-           ▼
-  translator: GraphQL AST → single Cypher
-           │
-           ▼
+           |
+           v
+  translator: GraphQL AST -> single Cypher
+           |
+           v
   driver: one database round-trip
-           │
-           ▼
+           |
+           v
   Result.Decode(&resp)
 ```
 
@@ -641,10 +850,11 @@ pkg/
   translate/        GraphQL-to-Cypher translator (AST walker, CALL subqueries, map projections)
   driver/           Abstract Cypher driver interface + Transaction support
     neo4j/          Neo4j driver implementation
+    falkordb/       FalkorDB driver implementation
   codegen/          Code generation pipeline (augment, models, registry, client, indexes)
   client/           Programmatic GraphQL client (translator + gqlparser validation, Result with Decode)
   internal/
-    strutil/        Shared string utilities (Capitalize, PluralLower)
+    strutil/        Shared string utilities
 ```
 
 ## Type Mapping
@@ -661,6 +871,7 @@ pkg/
 | `Boolean` | `*bool` | `BOOLEAN` |
 | `ID!` | `string` | `STRING` |
 | `ID` | `*string` | `STRING` |
+| `[Float!]!` | `[]float64` | `LIST<FLOAT>` |
 
 Nullable GraphQL types map to Go pointer types. Enum types map to `string`.
 
