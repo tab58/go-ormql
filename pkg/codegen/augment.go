@@ -24,6 +24,14 @@ func AugmentSchema(model schema.GraphModel) (string, error) {
 
 	var b strings.Builder
 
+	// Emit custom scalar declarations so the augmented SDL is self-contained.
+	for _, s := range model.CustomScalars {
+		fmt.Fprintf(&b, "scalar %s\n", s)
+	}
+	if len(model.CustomScalars) > 0 {
+		fmt.Fprintln(&b)
+	}
+
 	// Generate original node types (without custom directives).
 	// Build a map of relationships per node for connection fields on parent types.
 	relsByNode := map[string][]schema.RelationshipDefinition{}

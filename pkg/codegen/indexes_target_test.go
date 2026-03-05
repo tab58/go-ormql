@@ -109,8 +109,11 @@ func TestGenerateIndexes_FalkorDBDDL(t *testing.T) {
 		t.Fatal("output is nil")
 	}
 	src := string(out)
-	if !strings.Contains(src, "CREATE VECTOR INDEX IF NOT EXISTS FOR") {
-		t.Error("FalkorDB DDL missing 'CREATE VECTOR INDEX IF NOT EXISTS FOR'")
+	if !strings.Contains(src, "CREATE VECTOR INDEX FOR") {
+		t.Error("FalkorDB DDL missing 'CREATE VECTOR INDEX FOR'")
+	}
+	if strings.Contains(src, "IF NOT EXISTS") {
+		t.Error("FalkorDB DDL should NOT contain 'IF NOT EXISTS'")
 	}
 	if !strings.Contains(src, "dimension") {
 		t.Error("FalkorDB DDL missing 'dimension' option key")
@@ -124,6 +127,13 @@ func TestGenerateIndexes_FalkorDBDDL(t *testing.T) {
 	}
 	if strings.Contains(src, "vector.dimensions") {
 		t.Error("FalkorDB DDL should NOT contain 'vector.dimensions' (Neo4j-specific)")
+	}
+	// FalkorDB should emit isAlreadyIndexed helper and use it in error check
+	if !strings.Contains(src, "isAlreadyIndexed") {
+		t.Error("FalkorDB output missing 'isAlreadyIndexed' helper")
+	}
+	if !strings.Contains(src, "!isAlreadyIndexed(err)") {
+		t.Error("FalkorDB output missing '!isAlreadyIndexed(err)' error check")
 	}
 }
 

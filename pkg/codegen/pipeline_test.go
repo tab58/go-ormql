@@ -597,6 +597,35 @@ func TestGenerate_ScalarsGenContent(t *testing.T) {
 	}
 }
 
+// TestGenerate_AugmentedSchemaContainsCustomScalars verifies that the augmented
+// schema.graphql contains scalar declarations when the schema uses custom scalars.
+func TestGenerate_AugmentedSchemaContainsCustomScalars(t *testing.T) {
+	schemaPath := writeSampleSchemaWithScalars(t)
+	outputDir := t.TempDir()
+
+	cfg := Config{
+		SchemaFiles: []string{schemaPath},
+		OutputDir:   outputDir,
+		PackageName: "generated",
+	}
+
+	if err := Generate(cfg); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "schema.graphql"))
+	if err != nil {
+		t.Fatalf("failed to read schema.graphql: %v", err)
+	}
+	src := string(content)
+	if !strings.Contains(src, "scalar DateTime") {
+		t.Error("augmented schema.graphql missing 'scalar DateTime' declaration")
+	}
+	if !strings.Contains(src, "scalar Money") {
+		t.Error("augmented schema.graphql missing 'scalar Money' declaration")
+	}
+}
+
 // TestGenerate_NoScalarsGenWithoutCustomScalars verifies that scalars_gen.go
 // is NOT produced when the schema has no custom scalar declarations.
 func TestGenerate_NoScalarsGenWithoutCustomScalars(t *testing.T) {

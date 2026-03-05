@@ -225,6 +225,22 @@ func TestGenerateGraphModelRegistry_EmptyPackageName(t *testing.T) {
 	}
 }
 
+// === Bug 2: AugmentSchema emits custom scalar declarations ===
+
+// TestGenerateGraphModelRegistry_AugmentedSchemaContainsScalars verifies that when the
+// augmented SDL contains custom scalar declarations, they appear in the generated output.
+func TestGenerateGraphModelRegistry_AugmentedSchemaContainsScalars(t *testing.T) {
+	sdlWithScalar := "scalar DateTime\n\ntype Query {\n  movies: [Movie!]!\n}\ntype Movie {\n  id: ID!\n  title: String!\n  createdAt: DateTime!\n}"
+	out, err := GenerateGraphModelRegistry(fullModel(), sdlWithScalar, "generated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	src := string(out)
+	if !strings.Contains(src, "scalar DateTime") {
+		t.Error("AugmentedSchemaSDL should contain 'scalar DateTime' declaration")
+	}
+}
+
 // === CG-35: IsList serialization in registry tests ===
 
 // TestGenerateGraphModelRegistry_IsListTrue verifies that IsList: true is serialized

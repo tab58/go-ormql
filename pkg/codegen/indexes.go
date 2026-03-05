@@ -15,7 +15,7 @@ const vectorIndexDDLFormat = "CREATE VECTOR INDEX %s IF NOT EXISTS FOR (n:%s) ON
 // falkorDBVectorIndexDDLFormat is the FalkorDB Cypher DDL template for creating a vector index.
 // FalkorDB does not support named vector indexes; the index is identified by label and property.
 // Arguments: label, fieldName, dimensions, similarity.
-const falkorDBVectorIndexDDLFormat = "CREATE VECTOR INDEX IF NOT EXISTS FOR (n:%s) ON (n.%s) OPTIONS {dimension: %d, similarityFunction: '%s'}"
+const falkorDBVectorIndexDDLFormat = "CREATE VECTOR INDEX FOR (n:%s) ON (n.%s) OPTIONS {dimension: %d, similarityFunction: '%s'}"
 
 // GenerateIndexes produces Go source code containing a CreateIndexes function
 // that creates vector indexes using driver.ExecuteWrite.
@@ -51,7 +51,11 @@ func GenerateIndexes(model schema.GraphModel, packageName string, target Target)
 	sb.WriteString(fmt.Sprintf("package %s\n\n", packageName))
 	sb.WriteString("import (\n")
 	sb.WriteString("\t\"context\"\n")
-	sb.WriteString("\t\"fmt\"\n\n")
+	sb.WriteString("\t\"fmt\"\n")
+	if target == TargetFalkorDB {
+		sb.WriteString("\t\"strings\"\n")
+	}
+	sb.WriteString("\n")
 	sb.WriteString("\t\"github.com/tab58/go-ormql/pkg/cypher\"\n")
 	sb.WriteString("\t\"github.com/tab58/go-ormql/pkg/driver\"\n")
 	sb.WriteString(")\n\n")
@@ -65,6 +69,14 @@ func GenerateIndexes(model schema.GraphModel, packageName string, target Target)
 		for _, idx := range indexes {
 			sb.WriteString(fmt.Sprintf("\t%q: {Label: %q, Property: %q},\n", idx.indexName, idx.label, idx.fieldName))
 		}
+		sb.WriteString("}\n\n")
+	}
+
+	// FalkorDB: emit isAlreadyIndexed helper since FalkorDB lacks IF NOT EXISTS
+	if target == TargetFalkorDB {
+		sb.WriteString("// isAlreadyIndexed returns true if the error indicates the attribute is already indexed.\n")
+		sb.WriteString("func isAlreadyIndexed(err error) bool {\n")
+		sb.WriteString("\treturn err != nil && strings.Contains(err.Error(), \"already indexed\")\n")
 		sb.WriteString("}\n\n")
 	}
 
@@ -83,7 +95,11 @@ func GenerateIndexes(model schema.GraphModel, packageName string, target Target)
 				idx.indexName, idx.label, idx.fieldName, idx.dimensions, idx.similarity,
 			)
 		}
-		sb.WriteString(fmt.Sprintf("\tif _, err := drv.ExecuteWrite(ctx, cypher.Statement{Query: %q}); err != nil {\n", ddl))
+		if target == TargetFalkorDB {
+			sb.WriteString(fmt.Sprintf("\tif _, err := drv.ExecuteWrite(ctx, cypher.Statement{Query: %q}); err != nil && !isAlreadyIndexed(err) {\n", ddl))
+		} else {
+			sb.WriteString(fmt.Sprintf("\tif _, err := drv.ExecuteWrite(ctx, cypher.Statement{Query: %q}); err != nil {\n", ddl))
+		}
 		sb.WriteString(fmt.Sprintf("\t\treturn fmt.Errorf(\"failed to create vector index %s: %%w\", err)\n", idx.indexName))
 		sb.WriteString("\t}\n")
 	}

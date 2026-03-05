@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -265,6 +266,53 @@ func TestE2EV2_RegistryContainsVars(t *testing.T) {
 	}
 	if !contains(src, "var AugmentedSchemaSDL") {
 		t.Error("graphmodel_gen.go missing 'var AugmentedSchemaSDL' declaration")
+	}
+}
+
+// v2ScalarSchema returns a schema with custom scalar declarations.
+func v2ScalarSchema() string {
+	return `scalar DateTime
+
+type Event @node {
+	id: ID!
+	title: String!
+	startTime: DateTime!
+}
+`
+}
+
+// writeV2ScalarSchema writes a schema with custom scalars to a temp directory.
+func writeV2ScalarSchema(t *testing.T) (schemaPath, outputDir string) {
+	t.Helper()
+	baseDir := t.TempDir()
+	schemaPath = filepath.Join(baseDir, "schema.graphql")
+	if err := os.WriteFile(schemaPath, []byte(v2ScalarSchema()), 0644); err != nil {
+		t.Fatalf("failed to write schema file: %v", err)
+	}
+	outputDir = filepath.Join(baseDir, "generated")
+	return schemaPath, outputDir
+}
+
+// Test: AugmentedSchemaSDL contains scalar declarations for custom scalars.
+// Expected: schema.graphql contains "scalar DateTime" when DateTime is used.
+func TestE2EV2_AugmentedSchemaContainsScalarDeclarations(t *testing.T) {
+	schemaPath, outputDir := writeV2ScalarSchema(t)
+	cfg := Config{
+		SchemaFiles: []string{schemaPath},
+		OutputDir:   outputDir,
+		PackageName: "generated",
+	}
+	if err := Generate(cfg); err != nil {
+		t.Fatalf("V2 Generate failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "schema.graphql"))
+	if err != nil {
+		t.Fatalf("failed to read schema.graphql: %v", err)
+	}
+	src := string(content)
+	if !strings.Contains(src, "scalar DateTime") {
+		t.Error("augmented schema.graphql missing 'scalar DateTime' declaration")
 	}
 }
 
