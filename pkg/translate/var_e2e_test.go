@@ -40,30 +40,30 @@ func TestE2E_QueryVariableFilter(t *testing.T) {
 	op := doc.Operations[0]
 	variables := map[string]any{"title": "Matrix"}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Cypher should contain WHERE with a parameter
-	if !strings.Contains(stmt.Query, "WHERE") {
-		t.Errorf("expected WHERE in query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "WHERE") {
+		t.Errorf("expected WHERE in query, got %q", plan.ReadStatement.Query)
 	}
 
 	// Params should contain "Matrix" (resolved), not "title" (var name)
 	foundMatrix := false
-	for _, v := range stmt.Params {
+	for _, v := range plan.ReadStatement.Params {
 		if v == "Matrix" {
 			foundMatrix = true
 			break
 		}
 	}
 	if !foundMatrix {
-		t.Errorf("expected 'Matrix' in params, got %v", stmt.Params)
+		t.Errorf("expected 'Matrix' in params, got %v", plan.ReadStatement.Params)
 	}
 
 	// "title" as a param VALUE would be wrong (that's the variable name)
-	for k, v := range stmt.Params {
+	for k, v := range plan.ReadStatement.Params {
 		if v == "title" {
 			t.Errorf("param %q has variable name 'title' instead of resolved value", k)
 		}
@@ -98,14 +98,14 @@ func TestE2E_QueryVariablePagination(t *testing.T) {
 	op := doc.Operations[0]
 	variables := map[string]any{"limit": float64(10)}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Params should contain first=10 (resolved from float64)
 	found := false
-	for k, v := range stmt.Params {
+	for k, v := range plan.ReadStatement.Params {
 		if strings.HasSuffix(k, "_first") {
 			if v == 10 || v == int(10) || v == int64(10) {
 				found = true
@@ -114,7 +114,7 @@ func TestE2E_QueryVariablePagination(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("expected first=10 in params, got %v", stmt.Params)
+		t.Errorf("expected first=10 in params, got %v", plan.ReadStatement.Params)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestE2E_QueryMixedLiteralVariable(t *testing.T) {
 	op := doc.Operations[0]
 	variables := map[string]any{"year": float64(1999)}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestE2E_QueryMixedLiteralVariable(t *testing.T) {
 	// Both "Matrix" (literal) and 1999 (resolved variable) should be in params
 	hasMatrix := false
 	hasYear := false
-	for _, v := range stmt.Params {
+	for _, v := range plan.ReadStatement.Params {
 		if v == "Matrix" {
 			hasMatrix = true
 		}
@@ -163,10 +163,10 @@ func TestE2E_QueryMixedLiteralVariable(t *testing.T) {
 		}
 	}
 	if !hasMatrix {
-		t.Errorf("expected 'Matrix' literal in params, got %v", stmt.Params)
+		t.Errorf("expected 'Matrix' literal in params, got %v", plan.ReadStatement.Params)
 	}
 	if !hasYear {
-		t.Errorf("expected float64(1999) resolved variable in params, got %v", stmt.Params)
+		t.Errorf("expected float64(1999) resolved variable in params, got %v", plan.ReadStatement.Params)
 	}
 }
 
@@ -194,17 +194,17 @@ func TestE2E_QueryVariableSort(t *testing.T) {
 		"sort": []any{map[string]any{"released": "DESC"}},
 	}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should contain ORDER BY with n.released DESC
-	if !strings.Contains(stmt.Query, "ORDER BY") {
-		t.Errorf("expected ORDER BY in query with variable sort, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "ORDER BY") {
+		t.Errorf("expected ORDER BY in query with variable sort, got %q", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "n.released DESC") {
-		t.Errorf("expected 'n.released DESC' in query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "n.released DESC") {
+		t.Errorf("expected 'n.released DESC' in query, got %q", plan.ReadStatement.Query)
 	}
 }
 
@@ -233,14 +233,14 @@ func TestE2E_MutationVariableInput(t *testing.T) {
 		"input": []any{map[string]any{"title": "New", "released": float64(2024)}},
 	}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Params should contain the resolved input list
 	found := false
-	for _, v := range stmt.Params {
+	for _, v := range plan.ReadStatement.Params {
 		if list, ok := v.([]any); ok && len(list) == 1 {
 			if m, ok := list[0].(map[string]any); ok && m["title"] == "New" {
 				found = true
@@ -249,7 +249,7 @@ func TestE2E_MutationVariableInput(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("expected resolved input list in params, got %v", stmt.Params)
+		t.Errorf("expected resolved input list in params, got %v", plan.ReadStatement.Params)
 	}
 }
 
@@ -286,7 +286,7 @@ func TestE2E_MutationVariableWhereUpdate(t *testing.T) {
 	op := doc.Operations[0]
 	variables := map[string]any{"id": "1", "title": "Updated"}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestE2E_MutationVariableWhereUpdate(t *testing.T) {
 	// Params should contain "1" and "Updated" (resolved), not "id" and "title"
 	hasID := false
 	hasTitle := false
-	for _, v := range stmt.Params {
+	for _, v := range plan.ReadStatement.Params {
 		if v == "1" {
 			hasID = true
 		}
@@ -303,10 +303,10 @@ func TestE2E_MutationVariableWhereUpdate(t *testing.T) {
 		}
 	}
 	if !hasID {
-		t.Errorf("expected '1' in params for resolved $id, got %v", stmt.Params)
+		t.Errorf("expected '1' in params for resolved $id, got %v", plan.ReadStatement.Params)
 	}
 	if !hasTitle {
-		t.Errorf("expected 'Updated' in params for resolved $title, got %v", stmt.Params)
+		t.Errorf("expected 'Updated' in params for resolved $title, got %v", plan.ReadStatement.Params)
 	}
 }
 
@@ -334,11 +334,11 @@ func TestE2E_CypherFieldVariableArg(t *testing.T) {
 	// so this test just verifies variables pass through without error.
 	variables := map[string]any{"limit": float64(3)}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty query with @cypher field")
 	}
 }
@@ -370,7 +370,7 @@ func TestE2E_ConnectionVariablePagination(t *testing.T) {
 	op := doc.Operations[0]
 	variables := map[string]any{"limit": float64(5), "cursor": cursor}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestE2E_ConnectionVariablePagination(t *testing.T) {
 	// first=5 and offset=3 (cursor:2 → 2 + 1 = 3) should be in params
 	firstOk := false
 	offsetOk := false
-	for k, v := range stmt.Params {
+	for k, v := range plan.ReadStatement.Params {
 		if strings.HasSuffix(k, "_first") {
 			if v == 5 || v == int(5) || v == int64(5) {
 				firstOk = true
@@ -391,10 +391,10 @@ func TestE2E_ConnectionVariablePagination(t *testing.T) {
 		}
 	}
 	if !firstOk {
-		t.Errorf("expected first=5 in params, got %v", stmt.Params)
+		t.Errorf("expected first=5 in params, got %v", plan.ReadStatement.Params)
 	}
 	if !offsetOk {
-		t.Errorf("expected offset=3 in params, got %v", stmt.Params)
+		t.Errorf("expected offset=3 in params, got %v", plan.ReadStatement.Params)
 	}
 }
 
@@ -423,15 +423,15 @@ func TestE2E_MissingOptionalVariable(t *testing.T) {
 	op := doc.Operations[0]
 	variables := map[string]any{} // title not provided
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// The param for the missing variable should be nil, not the string "title"
-	for k, v := range stmt.Params {
+	for k, v := range plan.ReadStatement.Params {
 		if v == "title" {
-			t.Errorf("param %q has variable name 'title' — should be nil for missing optional var, params: %v", k, stmt.Params)
+			t.Errorf("param %q has variable name 'title' — should be nil for missing optional var, params: %v", k, plan.ReadStatement.Params)
 		}
 	}
 }
@@ -456,21 +456,21 @@ func TestE2E_LiteralOnlyRegression(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should work exactly as before — param contains "Matrix"
 	found := false
-	for _, v := range stmt.Params {
+	for _, v := range plan.ReadStatement.Params {
 		if v == "Matrix" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected 'Matrix' in params for literal-only query, got %v", stmt.Params)
+		t.Errorf("expected 'Matrix' in params for literal-only query, got %v", plan.ReadStatement.Params)
 	}
 }
 
@@ -498,17 +498,17 @@ func TestE2E_BooleanVariableIsNull(t *testing.T) {
 	op := doc.Operations[0]
 	variables := map[string]any{"check": true}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should produce IS NULL (check=true), not IS NOT NULL
-	if !strings.Contains(stmt.Query, "IS NULL") {
-		t.Errorf("expected 'IS NULL' for true _isNull variable, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "IS NULL") {
+		t.Errorf("expected 'IS NULL' for true _isNull variable, got %q", plan.ReadStatement.Query)
 	}
 	// Should NOT contain "IS NOT NULL" since the variable is true
-	if strings.Contains(stmt.Query, "IS NOT NULL") {
-		t.Errorf("expected 'IS NULL' (not 'IS NOT NULL') for true _isNull variable, got %q", stmt.Query)
+	if strings.Contains(plan.ReadStatement.Query, "IS NOT NULL") {
+		t.Errorf("expected 'IS NULL' (not 'IS NOT NULL') for true _isNull variable, got %q", plan.ReadStatement.Query)
 	}
 }

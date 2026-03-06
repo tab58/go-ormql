@@ -76,9 +76,11 @@ func newRealFalkorDBDriver(cfg driver.Config) (driver.Driver, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 
 	opts := &fdb.ConnectionOption{
-		Addr:     addr,
-		Username: cfg.Username,
-		Password: cfg.Password,
+		Addr:         addr,
+		Username:     cfg.Username,
+		Password:     cfg.Password,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
 	}
 
 	if cfg.Scheme == "rediss" {

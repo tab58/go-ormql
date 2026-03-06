@@ -9,6 +9,57 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+// translateMergeFieldSplit splits a merge mutation field into a FOREACH write query
+// and a MATCH read CALL block. Returns (writeQuery, readCallBlock, alias, error).
+// The write uses FOREACH for O(1) memory. The read uses MATCH to fetch merged nodes.
+// Both share the same $input parameter.
+func (t *Translator) translateMergeFieldSplit(field *ast.Field, scope *paramScope) (string, string, string, error) {
+	alias := "__" + field.Name
+
+	node, ok := t.extractNodeName(field.Name, "merge")
+	if !ok {
+		return "", "", "", fmt.Errorf("unknown type for mutation field %q", field.Name)
+	}
+
+	inputArg, inputParam, err := resolveInputParam(field, scope)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	// Build match keys from user-provided input
+	matchKeyNames := extractMergeMatchKeyNames(inputArg, scope, node)
+	matchParts := buildMergeMatchParts(matchKeyNames)
+
+	onCreateParts := buildOnCreateSet(node)
+	onMatchParts := buildOnMatchSet(node)
+
+	// --- Build FOREACH write query ---
+	var writeSB strings.Builder
+	fmt.Fprintf(&writeSB, "FOREACH (item IN %s | MERGE (n:%s {%s})",
+		inputParam, node.Labels[0], strings.Join(matchParts, ", "))
+	if len(onCreateParts) > 0 {
+		fmt.Fprintf(&writeSB, " ON CREATE SET %s", strings.Join(onCreateParts, ", "))
+	}
+	if len(onMatchParts) > 0 {
+		fmt.Fprintf(&writeSB, " ON MATCH SET %s", strings.Join(onMatchParts, ", "))
+	}
+	writeSB.WriteString(")")
+
+	// --- Build MATCH read CALL block ---
+	projSelSet := findResponseSelectionSet(field.SelectionSet)
+
+	var readSB strings.Builder
+	readSB.WriteString("CALL { ")
+	fmt.Fprintf(&readSB, "UNWIND %s AS item", inputParam)
+	fmt.Fprintf(&readSB, " MATCH (n:%s {%s})", node.Labels[0], strings.Join(matchParts, ", "))
+
+	if err := t.appendProjectionReturn(&readSB, projSelSet, node, alias, scope, "merge"); err != nil {
+		return "", "", "", err
+	}
+
+	return writeSB.String(), readSB.String(), alias, nil
+}
+
 // translateMergeField translates a mergeNodes mutation field into a CALL subquery
 // with UNWIND + MERGE + ON CREATE SET + ON MATCH SET.
 //
@@ -27,19 +78,16 @@ func (t *Translator) translateMergeField(field *ast.Field, scope *paramScope) (s
 		return "", "", fmt.Errorf("unknown type for mutation field %q", field.Name)
 	}
 
-	_, inputParam, err := resolveInputParam(field, scope)
+	inputArg, inputParam, err := resolveInputParam(field, scope)
 	if err != nil {
 		return "", "", err
 	}
 
-	// Build match keys: all non-id, non-vector scalar fields
-	matchKeys := mergeMatchKeys(node)
-
-	// Build MERGE pattern with match keys
-	var matchParts []string
-	for _, f := range matchKeys {
-		matchParts = append(matchParts, fmt.Sprintf("%s: item.match.%s", f.Name, f.Name))
-	}
+	// Build match keys from the user-provided input (not schema defaults).
+	// This prevents null property errors when the user only provides a subset
+	// of fields in the match object.
+	matchKeyNames := extractMergeMatchKeyNames(inputArg, scope, node)
+	matchParts := buildMergeMatchParts(matchKeyNames)
 
 	onCreateParts := buildOnCreateSet(node)
 	onMatchParts := buildOnMatchSet(node)
@@ -67,10 +115,44 @@ func (t *Translator) translateMergeField(field *ast.Field, scope *paramScope) (s
 	return sb.String(), alias, nil
 }
 
-// mergeMatchKeys returns the fields that serve as MERGE match keys:
-// all non-id, non-vector scalar fields.
-func mergeMatchKeys(node schema.NodeDefinition) []schema.FieldDefinition {
-	var keys []schema.FieldDefinition
+// extractMergeMatchKeyNames determines which fields to use in the MERGE pattern
+// by inspecting the user-provided input. Checks AST children first (inline values),
+// then resolved variables. Falls back to all non-ID schema fields.
+func extractMergeMatchKeyNames(inputArg *ast.Argument, scope *paramScope, node schema.NodeDefinition) []string {
+	// Try AST children first (inline values)
+	if inputArg.Value != nil && len(inputArg.Value.Children) > 0 {
+		firstItem := inputArg.Value.Children[0].Value
+		matchVal := findASTChild(firstItem, "match")
+		if matchVal != nil && len(matchVal.Children) > 0 {
+			keys := make([]string, 0, len(matchVal.Children))
+			for _, child := range matchVal.Children {
+				keys = append(keys, child.Name)
+			}
+			return keys
+		}
+	}
+
+	// Try resolved variables
+	resolved := resolveValue(inputArg.Value, scope.variables)
+	if items, ok := resolved.([]any); ok && len(items) > 0 {
+		if first, ok := items[0].(map[string]any); ok {
+			if matchMap, ok := first["match"].(map[string]any); ok {
+				keys := make([]string, 0, len(matchMap))
+				for k := range matchMap {
+					keys = append(keys, k)
+				}
+				return keys
+			}
+		}
+	}
+
+	// Fallback: all non-ID, non-vector schema fields
+	return mergeMatchKeyNames(node)
+}
+
+// mergeMatchKeyNames returns the names of all non-ID, non-vector scalar fields.
+func mergeMatchKeyNames(node schema.NodeDefinition) []string {
+	var keys []string
 	for _, f := range node.Fields {
 		if f.IsID {
 			continue
@@ -78,9 +160,19 @@ func mergeMatchKeys(node schema.NodeDefinition) []schema.FieldDefinition {
 		if node.VectorField != nil && f.Name == node.VectorField.Name {
 			continue
 		}
-		keys = append(keys, f)
+		keys = append(keys, f.Name)
 	}
 	return keys
+}
+
+// buildMergeMatchParts builds the {key: item.match.key, ...} property map entries
+// for a MERGE pattern from the given match key names.
+func buildMergeMatchParts(matchKeyNames []string) []string {
+	parts := make([]string, len(matchKeyNames))
+	for i, name := range matchKeyNames {
+		parts[i] = fmt.Sprintf("%s: item.match.%s", name, name)
+	}
+	return parts
 }
 
 // buildOnCreateSet builds ON CREATE SET parts for a merge mutation.

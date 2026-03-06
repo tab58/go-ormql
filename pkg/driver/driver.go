@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/tab58/go-ormql/pkg/cypher"
 )
@@ -23,6 +24,12 @@ type Config struct {
 	Username string
 	Password string
 	Database string
+	// ReadTimeout is the timeout for socket reads on the underlying connection.
+	// Zero means use the driver default (typically 3s for Redis).
+	ReadTimeout time.Duration
+	// WriteTimeout is the timeout for socket writes on the underlying connection.
+	// Zero means use the driver default (typically 3s for Redis).
+	WriteTimeout time.Duration
 	// VectorIndexes maps index name → VectorIndex for FalkorDB vector query rewriting.
 	// Optional — only needed when using FalkorDB with @vector directives.
 	VectorIndexes map[string]VectorIndex

@@ -24,18 +24,18 @@ func TestTranslate_QueryProducesStatement(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty Query in Statement, got empty")
 	}
-	if !strings.Contains(stmt.Query, "CALL") {
-		t.Errorf("expected CALL in Query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "CALL") {
+		t.Errorf("expected CALL in Query, got %q", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "AS data") {
-		t.Errorf("expected 'AS data' in Query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "AS data") {
+		t.Errorf("expected 'AS data' in Query, got %q", plan.ReadStatement.Query)
 	}
 }
 
@@ -63,11 +63,11 @@ func TestTranslate_MutationProducesStatement(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty Query in Statement for mutation, got empty")
 	}
 }
@@ -110,14 +110,14 @@ func TestTranslate_CollectsParams(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stmt.Params == nil {
+	if plan.ReadStatement.Params == nil {
 		t.Fatal("expected non-nil Params in Statement")
 	}
-	if len(stmt.Params) == 0 {
+	if len(plan.ReadStatement.Params) == 0 {
 		t.Error("expected at least one parameter in Statement.Params for filtered query")
 	}
 }
@@ -136,11 +136,11 @@ func TestTranslate_NilVariables(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error with nil variables: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty Query with nil variables")
 	}
 }
@@ -162,18 +162,18 @@ func TestTranslate_MultipleRootFields(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Count(stmt.Query, "CALL") < 2 {
-		t.Errorf("expected at least 2 CALL subqueries for 2 root fields, got %q", stmt.Query)
+	if strings.Count(plan.ReadStatement.Query, "CALL") < 2 {
+		t.Errorf("expected at least 2 CALL subqueries for 2 root fields, got %q", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "movies") {
-		t.Errorf("expected 'movies' in combined RETURN, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "movies") {
+		t.Errorf("expected 'movies' in combined RETURN, got %q", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "actors") {
-		t.Errorf("expected 'actors' in combined RETURN, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "actors") {
+		t.Errorf("expected 'actors' in combined RETURN, got %q", plan.ReadStatement.Query)
 	}
 }
 
@@ -202,21 +202,21 @@ func TestTranslate_E2E_QueryFilterSortNested(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty E2E query")
 	}
-	if !strings.Contains(stmt.Query, "WHERE") {
-		t.Errorf("expected WHERE in E2E query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "WHERE") {
+		t.Errorf("expected WHERE in E2E query, got %q", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "ORDER BY") {
-		t.Errorf("expected ORDER BY in E2E query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "ORDER BY") {
+		t.Errorf("expected ORDER BY in E2E query, got %q", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "AS data") {
-		t.Errorf("expected 'AS data' in E2E query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "AS data") {
+		t.Errorf("expected 'AS data' in E2E query, got %q", plan.ReadStatement.Query)
 	}
 }
 
@@ -256,20 +256,20 @@ func TestTranslate_E2E_CreateWithNested(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty E2E create mutation")
 	}
-	if !strings.Contains(stmt.Query, "CREATE") {
-		t.Errorf("expected CREATE in E2E mutation, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "CREATE") {
+		t.Errorf("expected CREATE in E2E mutation, got %q", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "AS data") {
-		t.Errorf("expected 'AS data' in E2E mutation, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "AS data") {
+		t.Errorf("expected 'AS data' in E2E mutation, got %q", plan.ReadStatement.Query)
 	}
-	if stmt.Params == nil {
+	if plan.ReadStatement.Params == nil {
 		t.Fatal("expected non-nil Params in E2E mutation Statement")
 	}
 }
@@ -294,14 +294,14 @@ func TestTranslate_E2E_Delete(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty E2E delete mutation")
 	}
-	if !strings.Contains(stmt.Query, "DETACH DELETE") {
-		t.Errorf("expected DETACH DELETE in E2E delete mutation, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "DETACH DELETE") {
+		t.Errorf("expected DETACH DELETE in E2E delete mutation, got %q", plan.ReadStatement.Query)
 	}
 }

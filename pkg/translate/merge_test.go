@@ -358,7 +358,7 @@ func TestTranslateConnectField_SizeReturn(t *testing.T) {
 
 // === TR-13: Dispatch wiring tests ===
 
-// Test: translateMutation dispatches mergeMovies to translateMergeField.
+// Test: translateMutationSplit dispatches mergeMovies to translateMergeFieldSplit.
 // Expected: mergeMovies mutation field does not return "unknown mutation field" error.
 func TestTranslateMutation_DispatchesMerge(t *testing.T) {
 	tr := New(mergeTestModel())
@@ -381,13 +381,13 @@ func TestTranslateMutation_DispatchesMerge(t *testing.T) {
 		}, makeArg("input", inputVal)),
 	)
 
-	_, err := tr.translateMutation(op, scope)
+	_, _, err := tr.translateMutationSplit(op, scope)
 	if err != nil && strings.Contains(err.Error(), "unknown mutation field") {
-		t.Fatalf("translateMutation did not dispatch mergeMovies — got unknown mutation field error: %v", err)
+		t.Fatalf("translateMutationSplit did not dispatch mergeMovies — got unknown mutation field error: %v", err)
 	}
 }
 
-// Test: translateMutation dispatches connectMovieActors to translateConnectField.
+// Test: translateMutationSplit dispatches connectMovieActors to translateConnectField.
 // Expected: connectMovieActors mutation field does not return "unknown mutation field" error.
 func TestTranslateMutation_DispatchesConnect(t *testing.T) {
 	tr := New(mergeTestModel())
@@ -410,9 +410,9 @@ func TestTranslateMutation_DispatchesConnect(t *testing.T) {
 		}, makeArg("input", inputVal)),
 	)
 
-	_, err := tr.translateMutation(op, scope)
+	_, _, err := tr.translateMutationSplit(op, scope)
 	if err != nil && strings.Contains(err.Error(), "unknown mutation field") {
-		t.Fatalf("translateMutation did not dispatch connectMovieActors — got unknown mutation field error: %v", err)
+		t.Fatalf("translateMutationSplit did not dispatch connectMovieActors — got unknown mutation field error: %v", err)
 	}
 }
 
@@ -439,15 +439,183 @@ func TestTranslate_MergeMutation_E2E(t *testing.T) {
 	)
 
 	doc := &ast.QueryDocument{Operations: ast.OperationList{op}}
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("Translate returned error: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty Cypher query from Translate")
 	}
-	if !strings.Contains(stmt.Query, "MERGE") {
-		t.Errorf("expected MERGE in Cypher output, got %q", stmt.Query)
+	// After FOREACH rewrite: MERGE is in WriteStatements, ReadStatement has MATCH only
+	if len(plan.WriteStatements) == 0 {
+		t.Fatal("expected non-empty WriteStatements for merge mutation")
+	}
+	if !strings.Contains(plan.WriteStatements[0].Query, "MERGE") {
+		t.Errorf("expected MERGE in WriteStatements[0], got %q", plan.WriteStatements[0].Query)
+	}
+	if strings.Contains(plan.ReadStatement.Query, "MERGE") {
+		t.Errorf("ReadStatement should NOT contain MERGE after FOREACH rewrite, got %q", plan.ReadStatement.Query)
+	}
+}
+
+// === FIX-1: extractMergeMatchKeyNames tests ===
+
+// Test: extractMergeMatchKeyNames with inline AST partial match returns only provided keys.
+// Expected: when input has match: {title: "X"}, only ["title"] is returned (not ["title", "released"]).
+func TestExtractMergeMatchKeyNames_InlinePartialMatch(t *testing.T) {
+	node := mergeTestModel().Nodes[0] // Movie: id(isID), title, released
+	scope := newParamScope()
+
+	// Input: [{match: {title: "The Matrix"}}] — only "title" in match, not "released"
+	inputVal := listVal(
+		makeWhereValue(map[string]*ast.Value{
+			"match": makeWhereValue(map[string]*ast.Value{
+				"title": strVal("The Matrix"),
+			}),
+		}),
+	)
+	arg := makeArg("input", inputVal)
+
+	keys := extractMergeMatchKeyNames(arg, scope, node)
+	if len(keys) != 1 {
+		t.Fatalf("len(keys) = %d, want 1 (only 'title')", len(keys))
+	}
+	if keys[0] != "title" {
+		t.Errorf("keys[0] = %q, want %q", keys[0], "title")
+	}
+}
+
+// Test: extractMergeMatchKeyNames with variable-based input resolves keys from variable map.
+// Expected: when input is a $variable, keys are extracted from the resolved variable value.
+func TestExtractMergeMatchKeyNames_VariableInput(t *testing.T) {
+	node := mergeTestModel().Nodes[0] // Movie: id(isID), title, released
+	scope := newParamScope()
+	scope.variables = map[string]any{
+		"input": []any{
+			map[string]any{
+				"match": map[string]any{
+					"title": "The Matrix",
+				},
+			},
+		},
+	}
+
+	// Input: $input (variable reference)
+	arg := makeArg("input", &ast.Value{Kind: ast.Variable, Raw: "input"})
+
+	keys := extractMergeMatchKeyNames(arg, scope, node)
+	if len(keys) != 1 {
+		t.Fatalf("len(keys) = %d, want 1 (only 'title')", len(keys))
+	}
+	if keys[0] != "title" {
+		t.Errorf("keys[0] = %q, want %q", keys[0], "title")
+	}
+}
+
+// Test: extractMergeMatchKeyNames falls back to all non-ID non-vector schema fields
+// when neither AST children nor variables provide match structure.
+// Expected: for Movie(id, title, released), returns ["title", "released"].
+func TestExtractMergeMatchKeyNames_Fallback(t *testing.T) {
+	node := mergeTestModel().Nodes[0] // Movie: id(isID), title, released
+	scope := newParamScope()
+
+	// Input with no match children (empty object) — triggers fallback
+	arg := makeArg("input", &ast.Value{Kind: ast.ListValue})
+
+	keys := extractMergeMatchKeyNames(arg, scope, node)
+	if len(keys) != 2 {
+		t.Fatalf("len(keys) = %d, want 2 (title, released)", len(keys))
+	}
+	// Should contain title and released (not id which is IsID)
+	found := map[string]bool{}
+	for _, k := range keys {
+		found[k] = true
+	}
+	if !found["title"] {
+		t.Error("fallback keys should contain 'title'")
+	}
+	if !found["released"] {
+		t.Error("fallback keys should contain 'released'")
+	}
+	if found["id"] {
+		t.Error("fallback keys should NOT contain 'id' (IsID field)")
+	}
+}
+
+// Test: mergeMatchKeyNames excludes ID and vector fields from match keys.
+// Expected: for a node with id(isID), title, released, embedding(@vector),
+// returns only ["title", "released"].
+func TestMergeMatchKeyNames_ExcludesIDAndVector(t *testing.T) {
+	node := schema.NodeDefinition{
+		Name:   "Movie",
+		Labels: []string{"Movie"},
+		Fields: []schema.FieldDefinition{
+			{Name: "id", IsID: true},
+			{Name: "title"},
+			{Name: "released"},
+			{Name: "embedding"},
+		},
+		VectorField: &schema.VectorFieldDefinition{
+			Name: "embedding",
+		},
+	}
+
+	keys := mergeMatchKeyNames(node)
+	if len(keys) != 2 {
+		t.Fatalf("len(keys) = %d, want 2 (title, released)", len(keys))
+	}
+	found := map[string]bool{}
+	for _, k := range keys {
+		found[k] = true
+	}
+	if !found["title"] {
+		t.Error("keys should contain 'title'")
+	}
+	if !found["released"] {
+		t.Error("keys should contain 'released'")
+	}
+	if found["id"] {
+		t.Error("keys should NOT contain 'id'")
+	}
+	if found["embedding"] {
+		t.Error("keys should NOT contain 'embedding' (vector field)")
+	}
+}
+
+// Test: full translateMergeField with partial match input produces MERGE pattern
+// with only the provided key, not all schema fields.
+// Expected: MERGE (n:Movie {title: item.match.title}) — NOT {title: ..., released: ...}
+func TestTranslateMergeField_PartialMatchUsesOnlyProvidedKeys(t *testing.T) {
+	tr := New(mergeTestModel())
+	scope := newParamScope()
+
+	// Only provide "title" in match — "released" is NOT in the match input
+	inputVal := listVal(
+		makeWhereValue(map[string]*ast.Value{
+			"match": makeWhereValue(map[string]*ast.Value{
+				"title": strVal("The Matrix"),
+			}),
+		}),
+	)
+
+	field := makeField("mergeMovies", ast.SelectionSet{
+		&ast.Field{Name: "movies", SelectionSet: ast.SelectionSet{
+			&ast.Field{Name: "id"},
+			&ast.Field{Name: "title"},
+		}},
+	}, makeArg("input", inputVal))
+
+	result, _, err := tr.translateMergeField(field, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// MERGE pattern should only contain title, not released
+	if !strings.Contains(result, "title: item.match.title") {
+		t.Errorf("expected 'title: item.match.title' in MERGE pattern, got %q", result)
+	}
+	if strings.Contains(result, "released: item.match.released") {
+		t.Errorf("MERGE pattern should NOT contain 'released: item.match.released' when only 'title' provided in match input, got %q", result)
 	}
 }
 
@@ -474,11 +642,11 @@ func TestTranslate_ConnectMutation_E2E(t *testing.T) {
 	)
 
 	doc := &ast.QueryDocument{Operations: ast.OperationList{op}}
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("Translate returned error: %v", err)
 	}
-	if stmt.Query == "" {
+	if plan.ReadStatement.Query == "" {
 		t.Fatal("expected non-empty Cypher query from Translate")
 	}
 }

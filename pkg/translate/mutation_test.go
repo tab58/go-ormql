@@ -22,7 +22,7 @@ func makeMutationOp(fields ...*ast.Field) *ast.OperationDefinition {
 	}
 }
 
-// Test: translateMutation with a single createMovies field produces a CALL subquery
+// Test: translateMutationSplit with a single createMovies field produces a CALL subquery
 // with UNWIND, CREATE, and collect().
 func TestTranslateMutation_SingleCreate(t *testing.T) {
 	tr := New(testModel())
@@ -44,18 +44,18 @@ func TestTranslateMutation_SingleCreate(t *testing.T) {
 		}, makeArg("input", inputVal)),
 	)
 
-	result, err := tr.translateMutation(op, scope)
+	_, read, err := tr.translateMutationSplit(op, scope)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == "" {
+	if read == "" {
 		t.Fatal("expected non-empty mutation query, got empty")
 	}
-	if !strings.Contains(result, "CALL") {
-		t.Errorf("expected CALL in mutation, got %q", result)
+	if !strings.Contains(read, "CALL") {
+		t.Errorf("expected CALL in mutation, got %q", read)
 	}
-	if !strings.Contains(result, "AS data") {
-		t.Errorf("expected 'AS data' in RETURN, got %q", result)
+	if !strings.Contains(read, "AS data") {
+		t.Errorf("expected 'AS data' in RETURN, got %q", read)
 	}
 }
 

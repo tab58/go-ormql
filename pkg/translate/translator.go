@@ -27,10 +27,22 @@ func New(model schema.GraphModel) *Translator {
 	return &Translator{model: model}
 }
 
-// Translate converts a parsed GraphQL operation into a single Cypher Statement.
+// TranslationPlan holds the output of translating a GraphQL operation.
+// For queries: WriteStatements is empty, ReadStatement contains the single query.
+// For merge mutations: WriteStatements contains FOREACH write statements (one per merge field),
+// ReadStatement contains the combined read query (MATCH projections + non-merge CALL blocks).
+// For non-merge mutations: WriteStatements is empty, ReadStatement contains the full mutation.
+type TranslationPlan struct {
+	WriteStatements []cypher.Statement
+	ReadStatement   cypher.Statement
+}
+
+// Translate converts a parsed GraphQL operation into a TranslationPlan.
 //
-// The returned Statement produces a single record with a single column "data"
+// The ReadStatement produces a single record with a single column "data"
 // whose value is a map matching the GraphQL response shape.
+// WriteStatements (if any) are FOREACH writes for merge mutations that must
+// be executed before the ReadStatement.
 //
 // Returns an error for unsupported operations (e.g., subscriptions),
 // unknown types, or invalid field references.
@@ -38,33 +50,51 @@ func (t *Translator) Translate(
 	doc *ast.QueryDocument,
 	op *ast.OperationDefinition,
 	variables map[string]any,
-) (cypher.Statement, error) {
+) (TranslationPlan, error) {
 	if op.Operation == ast.Subscription {
-		return cypher.Statement{}, fmt.Errorf("unsupported operation type: subscription")
+		return TranslationPlan{}, fmt.Errorf("unsupported operation type: subscription")
 	}
 
 	scope := newParamScope()
 	scope.variables = variables
 
-	var cypherStr string
-	var err error
-
 	switch op.Operation {
 	case ast.Query:
-		cypherStr, err = t.translateQuery(op, scope)
-	case ast.Mutation:
-		cypherStr, err = t.translateMutation(op, scope)
-	default:
-		return cypher.Statement{}, fmt.Errorf("unsupported operation type: %s", op.Operation)
-	}
-	if err != nil {
-		return cypher.Statement{}, err
-	}
+		cypherStr, err := t.translateQuery(op, scope)
+		if err != nil {
+			return TranslationPlan{}, err
+		}
+		return TranslationPlan{
+			ReadStatement: cypher.Statement{
+				Query:  cypherStr,
+				Params: scope.collect(),
+			},
+		}, nil
 
-	return cypher.Statement{
-		Query:  cypherStr,
-		Params: scope.collect(),
-	}, nil
+	case ast.Mutation:
+		writeQueries, readQuery, err := t.translateMutationSplit(op, scope)
+		if err != nil {
+			return TranslationPlan{}, err
+		}
+		params := scope.collect()
+		var writeStatements []cypher.Statement
+		for _, wq := range writeQueries {
+			writeStatements = append(writeStatements, cypher.Statement{
+				Query:  wq,
+				Params: params,
+			})
+		}
+		return TranslationPlan{
+			WriteStatements: writeStatements,
+			ReadStatement: cypher.Statement{
+				Query:  readQuery,
+				Params: params,
+			},
+		}, nil
+
+	default:
+		return TranslationPlan{}, fmt.Errorf("unsupported operation type: %s", op.Operation)
+	}
 }
 
 // fieldContext carries context for translating a field within the AST walk.

@@ -68,28 +68,28 @@ func TestTranslateSimilarField_BasicQuery(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should contain vector query procedure call
-	if !strings.Contains(stmt.Query, "db.index.vector.queryNodes") {
-		t.Errorf("expected 'db.index.vector.queryNodes' in query, got:\n%s", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "db.index.vector.queryNodes") {
+		t.Errorf("expected 'db.index.vector.queryNodes' in query, got:\n%s", plan.ReadStatement.Query)
 	}
 
 	// Should contain YIELD node AS n, score
-	if !strings.Contains(stmt.Query, "YIELD node AS n, score") {
-		t.Errorf("expected 'YIELD node AS n, score' in query, got:\n%s", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "YIELD node AS n, score") {
+		t.Errorf("expected 'YIELD node AS n, score' in query, got:\n%s", plan.ReadStatement.Query)
 	}
 
 	// Should contain collect with score and node projection
-	if !strings.Contains(stmt.Query, "score: score") {
-		t.Errorf("expected 'score: score' in projection, got:\n%s", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "score: score") {
+		t.Errorf("expected 'score: score' in projection, got:\n%s", plan.ReadStatement.Query)
 	}
 
 	// Parameters should include index name, first count, and vector
-	params := stmt.Params
+	params := plan.ReadStatement.Params
 	foundIndexName := false
 	foundFirst := false
 	foundVector := false
@@ -141,20 +141,20 @@ func TestTranslateSimilarField_DefaultFirst(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should have first=10 in params
 	foundFirst10 := false
-	for _, v := range stmt.Params {
+	for _, v := range plan.ReadStatement.Params {
 		if n, ok := v.(int); ok && n == 10 {
 			foundFirst10 = true
 		}
 	}
 	if !foundFirst10 {
-		t.Errorf("expected params to contain first=10 (default), params: %v", stmt.Params)
+		t.Errorf("expected params to contain first=10 (default), params: %v", plan.ReadStatement.Params)
 	}
 }
 
@@ -180,17 +180,17 @@ func TestTranslateSimilarField_NodeProjection(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Projection should include selected fields
-	if !strings.Contains(stmt.Query, ".title") {
-		t.Errorf("expected '.title' in node projection, got:\n%s", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, ".title") {
+		t.Errorf("expected '.title' in node projection, got:\n%s", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, ".released") {
-		t.Errorf("expected '.released' in node projection, got:\n%s", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, ".released") {
+		t.Errorf("expected '.released' in node projection, got:\n%s", plan.ReadStatement.Query)
 	}
 }
 
@@ -217,20 +217,20 @@ func TestTranslateSimilarField_VariableArguments(t *testing.T) {
 		"k":           float64(8), // JSON deserializes as float64
 	}
 
-	stmt, err := tr.Translate(doc, op, variables)
+	plan, err := tr.Translate(doc, op, variables)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Params should contain the resolved vector
 	foundVector := false
-	for _, v := range stmt.Params {
+	for _, v := range plan.ReadStatement.Params {
 		if vec, ok := v.([]float64); ok && len(vec) == 3 {
 			foundVector = true
 		}
 	}
 	if !foundVector {
-		t.Errorf("params missing resolved vector from variable, params: %v", stmt.Params)
+		t.Errorf("params missing resolved vector from variable, params: %v", plan.ReadStatement.Params)
 	}
 }
 
@@ -251,13 +251,13 @@ func TestTranslateSimilarField_ScoreOnlySelection(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(stmt.Query, "score: score") {
-		t.Errorf("expected 'score: score' in projection, got:\n%s", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "score: score") {
+		t.Errorf("expected 'score: score' in projection, got:\n%s", plan.ReadStatement.Query)
 	}
 }
 
@@ -281,17 +281,17 @@ func TestTranslateSimilarField_AlongsideOtherFields(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should have both aliases in the RETURN clause
-	if !strings.Contains(stmt.Query, "moviesSimilar:") {
-		t.Errorf("expected 'moviesSimilar:' in RETURN, got:\n%s", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "moviesSimilar:") {
+		t.Errorf("expected 'moviesSimilar:' in RETURN, got:\n%s", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "movies:") {
-		t.Errorf("expected 'movies:' in RETURN, got:\n%s", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "movies:") {
+		t.Errorf("expected 'movies:' in RETURN, got:\n%s", plan.ReadStatement.Query)
 	}
 }
 

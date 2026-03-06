@@ -274,21 +274,21 @@ func TestTranslate_E2E_MultiRelQuery(t *testing.T) {
 	}
 	op := doc.Operations[0]
 
-	stmt, err := tr.Translate(doc, op, nil)
+	plan, err := tr.Translate(doc, op, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should have both subquery aliases referenced
-	if !strings.Contains(stmt.Query, "__sub0") {
-		t.Errorf("expected __sub0 in query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "__sub0") {
+		t.Errorf("expected __sub0 in query, got %q", plan.ReadStatement.Query)
 	}
-	if !strings.Contains(stmt.Query, "__sub1") {
-		t.Errorf("expected __sub1 in query, got %q", stmt.Query)
+	if !strings.Contains(plan.ReadStatement.Query, "__sub1") {
+		t.Errorf("expected __sub1 in query, got %q", plan.ReadStatement.Query)
 	}
 
 	// Both should be in separate CALL blocks
-	callCount := strings.Count(stmt.Query, "CALL")
+	callCount := strings.Count(plan.ReadStatement.Query, "CALL")
 	if callCount < 3 {
 		t.Errorf("expected at least 3 CALL blocks (1 root + 2 subqueries), got %d", callCount)
 	}

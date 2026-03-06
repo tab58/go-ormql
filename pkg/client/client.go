@@ -151,18 +151,25 @@ func (c *Client) Execute(ctx context.Context, query string, variables map[string
 	op := doc.Operations[0]
 
 	// Translate to Cypher
-	stmt, err := c.translator.Translate(doc, op, variables)
+	plan, err := c.translator.Translate(doc, op, variables)
 	if err != nil {
 		return nil, fmt.Errorf("translation error: %w", err)
 	}
 
-	// Execute against driver — queries use Execute, mutations use ExecuteWrite
+	// Execute WriteStatements (FOREACH writes for merge mutations) before ReadStatement
+	for _, ws := range plan.WriteStatements {
+		if _, err := c.drv.ExecuteWrite(ctx, ws); err != nil {
+			return nil, fmt.Errorf("write statement failed: %w", err)
+		}
+	}
+
+	// Execute ReadStatement — queries use Execute, mutations use ExecuteWrite
 	var drvResult driver.Result
 	switch op.Operation {
 	case ast.Mutation:
-		drvResult, err = c.drv.ExecuteWrite(ctx, stmt)
+		drvResult, err = c.drv.ExecuteWrite(ctx, plan.ReadStatement)
 	default:
-		drvResult, err = c.drv.Execute(ctx, stmt)
+		drvResult, err = c.drv.Execute(ctx, plan.ReadStatement)
 	}
 	if err != nil {
 		return nil, err

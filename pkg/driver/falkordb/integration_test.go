@@ -313,6 +313,40 @@ func TestIntegration_NewFalkorDBDriver_InvalidHost(t *testing.T) {
 	}
 }
 
+// === FIX-2: ReadTimeout/WriteTimeout passthrough integration test ===
+
+// Test: FalkorDB driver accepts ReadTimeout/WriteTimeout in Config and connects successfully.
+// Expected: NewFalkorDBDriver with non-zero timeouts succeeds and queries work.
+// This verifies the timeout values are passed through to fdb.ConnectionOption
+// without causing connection failures.
+func TestIntegration_NewFalkorDBDriver_WithTimeouts(t *testing.T) {
+	cfg := startFalkorDBContainer(t)
+	cfg.ReadTimeout = 30 * time.Second
+	cfg.WriteTimeout = 30 * time.Second
+
+	drv, err := NewFalkorDBDriver(cfg)
+	if err != nil {
+		t.Fatalf("NewFalkorDBDriver with timeouts should connect: %v", err)
+	}
+	defer drv.Close(context.Background())
+
+	// Verify the driver is functional with the configured timeouts
+	createStmt := cypher.NodeCreate("TimeoutTest", map[string]any{"name": "test"})
+	_, err = drv.ExecuteWrite(context.Background(), createStmt)
+	if err != nil {
+		t.Fatalf("ExecuteWrite with configured timeouts failed: %v", err)
+	}
+
+	matchStmt := cypher.NodeMatch("TimeoutTest", cypher.EqualityWhere(map[string]any{"name": "test"}), nil)
+	result, err := drv.Execute(context.Background(), matchStmt)
+	if err != nil {
+		t.Fatalf("Execute with configured timeouts failed: %v", err)
+	}
+	if len(result.Records) == 0 {
+		t.Fatal("expected at least 1 record from query with configured timeouts")
+	}
+}
+
 // containsStr checks if s contains substr.
 func containsStr(s, substr string) bool {
 	return fmt.Sprintf("%s", s) != "" && len(s) >= len(substr) && findStr(s, substr)

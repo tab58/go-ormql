@@ -2,6 +2,7 @@ package driver
 
 import (
 	"testing"
+	"time"
 )
 
 // === CFG-1: Config refactor tests ===
@@ -76,6 +77,42 @@ func TestConfig_NilVectorIndexes(t *testing.T) {
 	}
 	if cfg.VectorIndexes != nil {
 		t.Error("VectorIndexes should be nil by default")
+	}
+}
+
+// === FIX-2: ReadTimeout/WriteTimeout tests ===
+
+// Test: Config has ReadTimeout and WriteTimeout fields of type time.Duration.
+// Expected: Config{ReadTimeout: 30s, WriteTimeout: 30s} compiles and stores values.
+func TestConfig_HasReadWriteTimeout(t *testing.T) {
+	cfg := Config{
+		Host:         "localhost",
+		Port:         7687,
+		Scheme:       "bolt",
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+	}
+	if cfg.ReadTimeout != 30*time.Second {
+		t.Errorf("ReadTimeout = %v, want %v", cfg.ReadTimeout, 30*time.Second)
+	}
+	if cfg.WriteTimeout != 60*time.Second {
+		t.Errorf("WriteTimeout = %v, want %v", cfg.WriteTimeout, 60*time.Second)
+	}
+}
+
+// Test: Config with zero ReadTimeout/WriteTimeout means use driver default.
+// Expected: zero-value Config has zero ReadTimeout and WriteTimeout.
+func TestConfig_ZeroTimeoutMeansDefault(t *testing.T) {
+	cfg := Config{
+		Host:   "localhost",
+		Port:   7687,
+		Scheme: "bolt",
+	}
+	if cfg.ReadTimeout != 0 {
+		t.Errorf("ReadTimeout should be zero by default, got %v", cfg.ReadTimeout)
+	}
+	if cfg.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout should be zero by default, got %v", cfg.WriteTimeout)
 	}
 }
 

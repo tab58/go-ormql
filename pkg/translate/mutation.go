@@ -8,14 +8,16 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// translateMutation handles a mutation operation.
-// Each root mutation field (e.g., "createMovies", "updateMovies", "deleteMovies")
-// becomes a CALL subquery. Combined into RETURN {f1: __f1, ...} AS data.
-func (t *Translator) translateMutation(op *ast.OperationDefinition, scope *paramScope) (string, error) {
+// translateMutationSplit separates mutation fields into write queries (FOREACH writes
+// from merge fields) and a read query (CALL blocks + RETURN map).
+// Non-merge fields remain as CALL blocks in the read query only.
+// Merge fields contribute both a write query AND a read CALL block.
+func (t *Translator) translateMutationSplit(op *ast.OperationDefinition, scope *paramScope) ([]string, string, error) {
 	if len(op.SelectionSet) == 0 {
-		return "RETURN {} AS data", nil
+		return nil, "RETURN {} AS data", nil
 	}
 
+	var writeQueries []string
 	var callBlocks []string
 	var returnParts []string
 
@@ -25,29 +27,40 @@ func (t *Translator) translateMutation(op *ast.OperationDefinition, scope *param
 			continue
 		}
 
-		var callBlock, alias string
-		var err error
-
 		name := field.Name
 		switch {
-		case strings.HasPrefix(name, "create"):
-			callBlock, alias, err = t.translateCreateField(field, scope)
-		case strings.HasPrefix(name, "update"):
-			callBlock, alias, err = t.translateUpdateField(field, scope)
-		case strings.HasPrefix(name, "delete"):
-			callBlock, alias, err = t.translateDeleteField(field, scope)
 		case strings.HasPrefix(name, "merge"):
-			callBlock, alias, err = t.translateMergeField(field, scope)
-		case strings.HasPrefix(name, "connect"):
-			callBlock, alias, err = t.translateConnectField(field, scope)
+			// Merge fields produce both a FOREACH write and a MATCH read CALL block
+			writeQuery, readBlock, alias, err := t.translateMergeFieldSplit(field, scope)
+			if err != nil {
+				return nil, "", err
+			}
+			writeQueries = append(writeQueries, writeQuery)
+			callBlocks = append(callBlocks, readBlock)
+			returnParts = append(returnParts, fmt.Sprintf("%s: %s", field.Alias, alias))
+
 		default:
-			return "", fmt.Errorf("unknown mutation field %q", name)
+			// Non-merge fields: create, update, delete, connect — single CALL block
+			var callBlock, alias string
+			var err error
+			switch {
+			case strings.HasPrefix(name, "create"):
+				callBlock, alias, err = t.translateCreateField(field, scope)
+			case strings.HasPrefix(name, "update"):
+				callBlock, alias, err = t.translateUpdateField(field, scope)
+			case strings.HasPrefix(name, "delete"):
+				callBlock, alias, err = t.translateDeleteField(field, scope)
+			case strings.HasPrefix(name, "connect"):
+				callBlock, alias, err = t.translateConnectField(field, scope)
+			default:
+				return nil, "", fmt.Errorf("unknown mutation field %q", name)
+			}
+			if err != nil {
+				return nil, "", err
+			}
+			callBlocks = append(callBlocks, callBlock)
+			returnParts = append(returnParts, fmt.Sprintf("%s: %s", field.Alias, alias))
 		}
-		if err != nil {
-			return "", err
-		}
-		callBlocks = append(callBlocks, callBlock)
-		returnParts = append(returnParts, fmt.Sprintf("%s: %s", field.Alias, alias))
 	}
 
 	var sb strings.Builder
@@ -55,9 +68,9 @@ func (t *Translator) translateMutation(op *ast.OperationDefinition, scope *param
 		sb.WriteString(block)
 		sb.WriteString(" ")
 	}
-	sb.WriteString(fmt.Sprintf("RETURN {%s} AS data", strings.Join(returnParts, ", ")))
+	fmt.Fprintf(&sb, "RETURN {%s} AS data", strings.Join(returnParts, ", "))
 
-	return sb.String(), nil
+	return writeQueries, sb.String(), nil
 }
 
 // extractNodeName extracts the node type name from a mutation field name.
@@ -109,13 +122,13 @@ func (t *Translator) translateCreateField(field *ast.Field, scope *paramScope) (
 
 	var sb strings.Builder
 	sb.WriteString("CALL { ")
-	sb.WriteString(fmt.Sprintf("UNWIND %s AS item CREATE (n:%s)", inputParam, node.Labels[0]))
-	sb.WriteString(fmt.Sprintf(" SET %s", strings.Join(setParts, ", ")))
+	fmt.Fprintf(&sb, "UNWIND %s AS item CREATE (n:%s)", inputParam, node.Labels[0])
+	fmt.Fprintf(&sb, " SET %s", strings.Join(setParts, ", "))
 
 	// Build nested mutation ops (create, connect) from input items
 	nestedOps := t.buildNestedCreateOps(inputArg.Value, "n", rels, node, scope)
 	if nestedOps != "" {
-		sb.WriteString(fmt.Sprintf(" WITH n, item %s", nestedOps))
+		fmt.Fprintf(&sb, " WITH n, item %s", nestedOps)
 	}
 
 	// Build projection for return and close CALL block
@@ -180,17 +193,17 @@ func (t *Translator) translateUpdateField(field *ast.Field, scope *paramScope) (
 
 	var sb strings.Builder
 	sb.WriteString("CALL { ")
-	sb.WriteString(fmt.Sprintf("MATCH (n:%s)", node.Labels[0]))
+	fmt.Fprintf(&sb, "MATCH (n:%s)", node.Labels[0])
 	if whereClause != "" {
-		sb.WriteString(fmt.Sprintf(" WHERE %s", whereClause))
+		fmt.Fprintf(&sb, " WHERE %s", whereClause)
 	}
 	if len(setParts) > 0 {
-		sb.WriteString(fmt.Sprintf(" SET %s", strings.Join(setParts, ", ")))
+		fmt.Fprintf(&sb, " SET %s", strings.Join(setParts, ", "))
 	}
 
 	// Nested ops require WITH clause
 	if nestedOps != "" {
-		sb.WriteString(fmt.Sprintf(" WITH n%s", nestedOps))
+		fmt.Fprintf(&sb, " WITH n%s", nestedOps)
 	}
 
 	// Build projection for return and close CALL block
@@ -222,13 +235,13 @@ func (t *Translator) translateDeleteField(field *ast.Field, scope *paramScope) (
 
 	var sb strings.Builder
 	sb.WriteString("CALL { ")
-	sb.WriteString(fmt.Sprintf("MATCH (n:%s)", node.Labels[0]))
+	fmt.Fprintf(&sb, "MATCH (n:%s)", node.Labels[0])
 	if whereClause != "" {
-		sb.WriteString(fmt.Sprintf(" WHERE %s", whereClause))
+		fmt.Fprintf(&sb, " WHERE %s", whereClause)
 	}
 	// Count before deleting, then DETACH DELETE
 	sb.WriteString(" WITH n, count(n) AS cnt DETACH DELETE n")
-	sb.WriteString(fmt.Sprintf(" RETURN cnt AS %s", alias))
+	fmt.Fprintf(&sb, " RETURN cnt AS %s", alias)
 	sb.WriteString(" }")
 
 	return sb.String(), alias, nil
