@@ -121,9 +121,9 @@ func TestMixedMutation_MergePlusDelete(t *testing.T) {
 	}
 }
 
-// Test: merge+connect produces 1 write and read with MATCH CALL + connect UNWIND CALL.
-// Expected: writes[0] has FOREACH, read has MATCH (merge) and UNWIND (connect).
-// FAILS RED: translateMutationSplit returns nil writes for merge fields.
+// Test: merge+connect produces 2 writes and read with MATCH CALL + count CALL.
+// Expected: writes[0] has FOREACH (merge), writes[1] has UNWIND+MERGE (connect).
+// Read has MATCH (merge projection) and size() (connect count).
 func TestMixedMutation_MergePlusConnect(t *testing.T) {
 	tr := New(mergeTestModel())
 	scope := newParamScope()
@@ -163,12 +163,20 @@ func TestMixedMutation_MergePlusConnect(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(writes) != 1 {
-		t.Errorf("expected 1 write query, got %d", len(writes))
+	// 2 writes: FOREACH from merge + UNWIND+MERGE from connect
+	if len(writes) != 2 {
+		t.Errorf("expected 2 write queries (merge + connect), got %d", len(writes))
 	}
-	// Connect still uses UNWIND in the read query
-	if !strings.Contains(read, "UNWIND") {
-		t.Errorf("read should contain UNWIND for connect, got %q", read)
+	if len(writes) > 0 && !strings.Contains(writes[0], "FOREACH") {
+		t.Errorf("writes[0] should contain FOREACH (merge), got %q", writes[0])
+	}
+	if len(writes) > 1 && !strings.Contains(writes[1], "MERGE") {
+		t.Errorf("writes[1] should contain MERGE (connect), got %q", writes[1])
+	}
+	// Read should NOT contain UNWIND for connect (write is separate now)
+	// Read should contain size() for the connect count
+	if !strings.Contains(read, "size") {
+		t.Errorf("read should contain size() for connect count, got %q", read)
 	}
 }
 

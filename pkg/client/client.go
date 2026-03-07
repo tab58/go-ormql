@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/tab58/go-ormql/pkg/cypher"
 	"github.com/tab58/go-ormql/pkg/driver"
 	"github.com/tab58/go-ormql/pkg/schema"
 	"github.com/tab58/go-ormql/pkg/translate"
@@ -186,6 +187,19 @@ func (c *Client) Execute(ctx context.Context, query string, variables map[string
 	}
 
 	return &Result{data: data}, nil
+}
+
+// ExecuteRaw sends a raw Cypher query directly to the driver without GraphQL
+// translation. Useful for lightweight operations like property updates that
+// don't need the full GraphQL→Cypher pipeline.
+func (c *Client) ExecuteRaw(ctx context.Context, query string, params map[string]any) (driver.Result, error) {
+	if c.isClosed() {
+		return driver.Result{}, errClientClosed
+	}
+	if c.logger != nil {
+		c.logger.Debug("cypher.executeRaw", "query", query, "params", params)
+	}
+	return c.drv.ExecuteWrite(ctx, cypher.Statement{Query: query, Params: params})
 }
 
 // Close releases the underlying driver resources and marks the client as closed.

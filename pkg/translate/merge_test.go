@@ -356,6 +356,116 @@ func TestTranslateConnectField_SizeReturn(t *testing.T) {
 	}
 }
 
+// === TR-12: translateConnectFieldSplit tests ===
+
+// Test: translateConnectFieldSplit write has UNWIND+MATCH+MERGE but no RETURN.
+func TestTranslateConnectFieldSplit_WriteHasNoReturn(t *testing.T) {
+	tr := New(mergeTestModel())
+	scope := newParamScope()
+
+	inputVal := listVal(
+		makeWhereValue(map[string]*ast.Value{
+			"from": makeWhereValue(map[string]*ast.Value{
+				"title": strVal("The Matrix"),
+			}),
+			"to": makeWhereValue(map[string]*ast.Value{
+				"name": strVal("Keanu Reeves"),
+			}),
+		}),
+	)
+
+	field := makeField("connectMovieActors", ast.SelectionSet{
+		&ast.Field{Name: "relationshipsCreated"},
+	}, makeArg("input", inputVal))
+
+	writeQuery, _, _, err := tr.translateConnectFieldSplit(field, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(writeQuery, "UNWIND") {
+		t.Errorf("write should contain UNWIND, got %q", writeQuery)
+	}
+	if !strings.Contains(writeQuery, "MERGE") {
+		t.Errorf("write should contain MERGE, got %q", writeQuery)
+	}
+	if strings.Contains(writeQuery, "RETURN") {
+		t.Errorf("write should NOT contain RETURN, got %q", writeQuery)
+	}
+	if strings.Contains(writeQuery, "CALL") {
+		t.Errorf("write should NOT be wrapped in CALL, got %q", writeQuery)
+	}
+}
+
+// Test: translateConnectFieldSplit read returns only size() count.
+func TestTranslateConnectFieldSplit_ReadHasSizeOnly(t *testing.T) {
+	tr := New(mergeTestModel())
+	scope := newParamScope()
+
+	inputVal := listVal(
+		makeWhereValue(map[string]*ast.Value{
+			"from": makeWhereValue(map[string]*ast.Value{
+				"title": strVal("The Matrix"),
+			}),
+			"to": makeWhereValue(map[string]*ast.Value{
+				"name": strVal("Keanu Reeves"),
+			}),
+		}),
+	)
+
+	field := makeField("connectMovieActors", ast.SelectionSet{
+		&ast.Field{Name: "relationshipsCreated"},
+	}, makeArg("input", inputVal))
+
+	_, readBlock, _, err := tr.translateConnectFieldSplit(field, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(readBlock, "size") {
+		t.Errorf("read should contain size(), got %q", readBlock)
+	}
+	if !strings.Contains(readBlock, "CALL") {
+		t.Errorf("read should be wrapped in CALL, got %q", readBlock)
+	}
+	if strings.Contains(readBlock, "MATCH") {
+		t.Errorf("read should NOT contain MATCH (write is separate), got %q", readBlock)
+	}
+	if strings.Contains(readBlock, "MERGE") {
+		t.Errorf("read should NOT contain MERGE (write is separate), got %q", readBlock)
+	}
+}
+
+// Test: translateConnectFieldSplit with edge properties includes SET in write.
+func TestTranslateConnectFieldSplit_EdgePropertiesInWrite(t *testing.T) {
+	tr := New(mergeTestModel())
+	scope := newParamScope()
+
+	inputVal := listVal(
+		makeWhereValue(map[string]*ast.Value{
+			"from": makeWhereValue(map[string]*ast.Value{
+				"title": strVal("The Matrix"),
+			}),
+			"to": makeWhereValue(map[string]*ast.Value{
+				"name": strVal("Keanu Reeves"),
+			}),
+			"edge": makeWhereValue(map[string]*ast.Value{
+				"role": strVal("Neo"),
+			}),
+		}),
+	)
+
+	field := makeField("connectMovieActors", ast.SelectionSet{
+		&ast.Field{Name: "relationshipsCreated"},
+	}, makeArg("input", inputVal))
+
+	writeQuery, _, _, err := tr.translateConnectFieldSplit(field, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(writeQuery, "SET") {
+		t.Errorf("write should contain SET for edge properties, got %q", writeQuery)
+	}
+}
+
 // === TR-13: Dispatch wiring tests ===
 
 // Test: translateMutationSplit dispatches mergeMovies to translateMergeFieldSplit.

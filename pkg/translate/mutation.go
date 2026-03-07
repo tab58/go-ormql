@@ -39,8 +39,18 @@ func (t *Translator) translateMutationSplit(op *ast.OperationDefinition, scope *
 			callBlocks = append(callBlocks, readBlock)
 			returnParts = append(returnParts, fmt.Sprintf("%s: %s", field.Alias, alias))
 
+		case strings.HasPrefix(name, "connect"):
+			// Connect fields produce a write (UNWIND+MATCH+MERGE) and a lightweight read (count)
+			writeQuery, readBlock, alias, err := t.translateConnectFieldSplit(field, scope)
+			if err != nil {
+				return nil, "", err
+			}
+			writeQueries = append(writeQueries, writeQuery)
+			callBlocks = append(callBlocks, readBlock)
+			returnParts = append(returnParts, fmt.Sprintf("%s: %s", field.Alias, alias))
+
 		default:
-			// Non-merge fields: create, update, delete, connect — single CALL block
+			// Non-split fields: create, update, delete — single CALL block
 			var callBlock, alias string
 			var err error
 			switch {
@@ -50,8 +60,6 @@ func (t *Translator) translateMutationSplit(op *ast.OperationDefinition, scope *
 				callBlock, alias, err = t.translateUpdateField(field, scope)
 			case strings.HasPrefix(name, "delete"):
 				callBlock, alias, err = t.translateDeleteField(field, scope)
-			case strings.HasPrefix(name, "connect"):
-				callBlock, alias, err = t.translateConnectField(field, scope)
 			default:
 				return nil, "", fmt.Errorf("unknown mutation field %q", name)
 			}

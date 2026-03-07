@@ -10,10 +10,11 @@ import (
 // === FE-3: translateMutation write/read separation ===
 //
 // translateMutation must be updated to return ([]string, string, error) where:
-// - []string are write queries (FOREACH writes from merge fields)
+// - []string are write queries (FOREACH writes from merge fields, UNWIND writes from connect fields)
 // - string is the read query (CALL blocks + RETURN map)
-// Non-merge fields (create, update, delete, connect) remain as CALL blocks in the read query only.
-// Merge fields contribute both a write query AND a read CALL block.
+// Non-split fields (create, update, delete) remain as CALL blocks in the read query only.
+// Merge fields contribute a FOREACH write + a MATCH read CALL block.
+// Connect fields contribute a UNWIND+MERGE write + a size() read CALL block.
 
 // Test: Mutation with only create has empty write queries.
 // Expected: writeQueries is empty, readQuery contains CREATE CALL block.
@@ -183,6 +184,61 @@ func TestMutationSplit_DeleteOnly_EmptyWrites(t *testing.T) {
 	}
 	if read == "" {
 		t.Fatal("expected non-empty read query for delete mutation")
+	}
+}
+
+// Test: Mutation with only connect has one write query and a lightweight read.
+// Expected: writeQueries has 1 entry with UNWIND+MERGE, readQuery has size() count.
+func TestMutationSplit_ConnectOnly_OneWriteLightRead(t *testing.T) {
+	tr := New(mergeTestModel())
+	scope := newParamScope()
+
+	inputVal := listVal(
+		makeWhereValue(map[string]*ast.Value{
+			"from": makeWhereValue(map[string]*ast.Value{
+				"title": strVal("The Matrix"),
+			}),
+			"to": makeWhereValue(map[string]*ast.Value{
+				"name": strVal("Keanu Reeves"),
+			}),
+		}),
+	)
+
+	op := makeMutationOp(
+		makeField("connectMovieActors", ast.SelectionSet{
+			&ast.Field{Name: "relationshipsCreated"},
+		}, makeArg("input", inputVal)),
+	)
+
+	writes, read, err := tr.translateMutationSplit(op, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(writes) != 1 {
+		t.Errorf("expected 1 write query for connect mutation, got %d", len(writes))
+	}
+	if len(writes) > 0 {
+		if !strings.Contains(writes[0], "UNWIND") {
+			t.Errorf("write should contain UNWIND, got %q", writes[0])
+		}
+		if !strings.Contains(writes[0], "MERGE") {
+			t.Errorf("write should contain MERGE, got %q", writes[0])
+		}
+		if strings.Contains(writes[0], "RETURN") {
+			t.Errorf("write should NOT contain RETURN (fire-and-forget), got %q", writes[0])
+		}
+		if strings.Contains(writes[0], "CALL") {
+			t.Errorf("write should NOT be wrapped in CALL, got %q", writes[0])
+		}
+	}
+	if read == "" {
+		t.Fatal("expected non-empty read query for connect mutation")
+	}
+	if !strings.Contains(read, "size") {
+		t.Errorf("read should contain size() for count, got %q", read)
+	}
+	if !strings.Contains(read, "AS data") {
+		t.Errorf("read should contain 'AS data' RETURN, got %q", read)
 	}
 }
 

@@ -202,6 +202,58 @@ func buildOnMatchSet(node schema.NodeDefinition) []string {
 	return parts
 }
 
+// translateConnectFieldSplit splits a connect mutation field into a write query
+// and a lightweight read CALL block. Returns (writeQuery, readCallBlock, alias, error).
+// The write uses UNWIND + MATCH + MATCH + MERGE without RETURN (fire-and-forget),
+// avoiding result-set accumulation that causes OOM in memory-constrained FalkorDB.
+// The read returns only the input count via size().
+func (t *Translator) translateConnectFieldSplit(field *ast.Field, scope *paramScope) (string, string, string, error) {
+	alias := "__" + field.Name
+
+	rel, ok := t.findRelationshipByConnectName(field.Name)
+	if !ok {
+		return "", "", "", fmt.Errorf("unknown relationship for connect field %q", field.Name)
+	}
+
+	fromNode, _ := t.model.NodeByName(rel.FromNode)
+	toNode, _ := t.model.NodeByName(rel.ToNode)
+
+	inputArg, inputParam, err := resolveInputParam(field, scope)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	// Extract AST structure for from/to fields from the first input item.
+	var fromInputVal, toInputVal *ast.Value
+	if inputArg.Value != nil && len(inputArg.Value.Children) > 0 {
+		firstItem := inputArg.Value.Children[0].Value
+		fromInputVal = findASTChild(firstItem, "from")
+		toInputVal = findASTChild(firstItem, "to")
+	}
+
+	// --- Build write query (no CALL wrapper, no RETURN) ---
+	var writeSB strings.Builder
+	fmt.Fprintf(&writeSB, "UNWIND %s AS item", inputParam)
+	writeConnectMatch(&writeSB, "from", fromNode, fromInputVal, "item.from")
+	writeConnectMatch(&writeSB, "to", toNode, toInputVal, "item.to")
+
+	mergePattern := buildRelPattern("from", "r", rel.RelType, "to", rel.Direction)
+	fmt.Fprintf(&writeSB, " MERGE %s", mergePattern)
+
+	if rel.Properties != nil && len(rel.Properties.Fields) > 0 {
+		var setParts []string
+		for _, f := range rel.Properties.Fields {
+			setParts = append(setParts, fmt.Sprintf("r.%s = item.edge.%s", f.Name, f.Name))
+		}
+		fmt.Fprintf(&writeSB, " SET %s", strings.Join(setParts, ", "))
+	}
+
+	// --- Build read CALL block (lightweight count only) ---
+	readBlock := fmt.Sprintf("CALL { RETURN size(%s) AS %s }", inputParam, alias)
+
+	return writeSB.String(), readBlock, alias, nil
+}
+
 // translateConnectField translates a connectSourceField mutation field into a
 // CALL subquery with UNWIND + double MATCH + MERGE for standalone edge creation.
 //
