@@ -128,3 +128,32 @@ func TestRewriteVectorQuery_UnknownIndex(t *testing.T) {
 	}
 }
 
+// Test: Vector param passed as []float64 is converted to []any for FalkorDB serialization.
+// Expected: rw3 param is []any, not []float64.
+func TestRewriteVectorQuery_Float64SliceConverted(t *testing.T) {
+	indexes := map[string]driver.VectorIndex{
+		"movie_embeddings": {Label: "Movie", Property: "embedding"},
+	}
+	query := "CALL db.index.vector.queryNodes($p0, $p1, $p2) YIELD node AS n, score"
+	params := map[string]any{
+		"p0": "movie_embeddings",
+		"p1": int64(5),
+		"p2": []float64{0.1, 0.2, 0.3},
+	}
+
+	_, newParams := rewriteVectorQuery(query, params, indexes)
+
+	vec, ok := newParams["rw3"].([]any)
+	if !ok {
+		t.Fatalf("rw3 should be []any, got %T", newParams["rw3"])
+	}
+	if len(vec) != 3 {
+		t.Fatalf("expected 3 elements, got %d", len(vec))
+	}
+	for i, v := range vec {
+		if _, ok := v.(float64); !ok {
+			t.Errorf("element %d should be float64, got %T", i, v)
+		}
+	}
+}
+

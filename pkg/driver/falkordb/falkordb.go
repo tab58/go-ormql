@@ -289,11 +289,28 @@ func rewriteVectorQuery(query string, params map[string]any, indexes map[string]
 	newParams["rw0"] = vecIdx.Label
 	newParams["rw1"] = vecIdx.Property
 	newParams["rw2"] = params[kParam]
-	newParams["rw3"] = params[vectorParam]
+	newParams["rw3"] = toInterfaceSlice(params[vectorParam])
 
 	// Rewrite the query
 	newCallArgs := "$rw0, $rw1, $rw2, $rw3"
 	rewritten := query[:idx] + falkorDBVectorProc + newCallArgs + query[argEnd:]
 
 	return rewritten, newParams
+}
+
+// toInterfaceSlice converts typed slices (e.g. []float64) to []interface{}
+// so that falkordb-go's ToString can serialize them.
+func toInterfaceSlice(v any) any {
+	switch s := v.(type) {
+	case []float64:
+		out := make([]any, len(s))
+		for i, f := range s {
+			out[i] = f
+		}
+		return out
+	case []any:
+		return v
+	default:
+		return v
+	}
 }
