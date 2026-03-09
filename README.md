@@ -22,6 +22,7 @@ Built for Go developers working with Neo4j, FalkorDB, or any Cypher-compatible d
 - **GraphQL variables** — full support for parameterized queries and mutations
 - **Type-safe results** — `Result.Decode()` unmarshals into generated Go structs
 - **Debug logging** — optional `log/slog` integration for GraphQL and Cypher query visibility
+- **Auto-chunking** — bulk mutations automatically split into batches (default 50, configurable via `WithBatchSize`) with transparent result aggregation
 - **Multi-database** — Neo4j and FalkorDB drivers included, with an abstract interface for others
 
 ## Requirements

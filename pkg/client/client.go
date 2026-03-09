@@ -28,6 +28,9 @@ var errClientClosed = errors.New("client is closed")
 // resultDataKey is the key used to extract the response map from driver records.
 const resultDataKey = "data"
 
+// logKeyChunkProgress is the slog message key for chunk execution progress.
+const logKeyChunkProgress = "graphql.execute.chunk"
+
 // Result wraps the GraphQL response data from a single execution.
 // The data map mirrors the GraphQL JSON response shape.
 type Result struct {
@@ -68,6 +71,7 @@ type Client struct {
 	augSchema  *ast.Schema
 	drv        driver.Driver
 	logger     *slog.Logger
+	batchSize  int
 	mu         sync.Mutex
 	closed     bool
 }
@@ -97,11 +101,17 @@ func New(model schema.GraphModel, augSchemaSDL string, drv driver.Driver, opts .
 		panic(fmt.Sprintf("gormql: failed to parse augmented schema: %v", parseErr))
 	}
 
+	batchSize := options.batchSize
+	if batchSize <= 0 {
+		batchSize = defaultBatchSize
+	}
+
 	return &Client{
 		translator: translate.New(model),
 		augSchema:  schemaDoc,
 		drv:        drv,
 		logger:     options.logger,
+		batchSize:  batchSize,
 	}
 }
 
@@ -157,36 +167,29 @@ func (c *Client) Execute(ctx context.Context, query string, variables map[string
 		return nil, fmt.Errorf("translation error: %w", err)
 	}
 
-	// Execute WriteStatements (FOREACH writes for merge mutations) before ReadStatement
-	for _, ws := range plan.WriteStatements {
-		if _, err := c.drv.ExecuteWrite(ctx, ws); err != nil {
-			return nil, fmt.Errorf("write statement failed: %w", err)
+	// Chunk params for bulk mutations
+	chunks := chunkParams(plan.ReadStatement.Params, c.batchSize)
+
+	if len(chunks) == 1 {
+		// Single pass — no chunking needed
+		return c.executeChunk(ctx, plan, op)
+	}
+
+	// Multiple chunks — execute each and aggregate
+	results := make([]map[string]any, 0, len(chunks))
+	for i, chunkParams := range chunks {
+		if c.logger != nil {
+			c.logger.Debug(logKeyChunkProgress, "chunk", i+1, "total", len(chunks))
 		}
-	}
 
-	// Execute ReadStatement — queries use Execute, mutations use ExecuteWrite
-	var drvResult driver.Result
-	switch op.Operation {
-	case ast.Mutation:
-		drvResult, err = c.drv.ExecuteWrite(ctx, plan.ReadStatement)
-	default:
-		drvResult, err = c.drv.Execute(ctx, plan.ReadStatement)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract records[0].Values["data"]
-	var data map[string]any
-	if len(drvResult.Records) > 0 {
-		if d, ok := drvResult.Records[0].Values[resultDataKey]; ok {
-			if m, ok := d.(map[string]any); ok {
-				data = m
-			}
+		result, err := c.executeChunk(ctx, buildChunkPlan(plan, chunkParams), op)
+		if err != nil {
+			return nil, fmt.Errorf("chunk %d/%d failed: %w", i+1, len(chunks), err)
 		}
+		results = append(results, result.data)
 	}
 
-	return &Result{data: data}, nil
+	return &Result{data: aggregateResults(results)}, nil
 }
 
 // ExecuteRaw sends a raw Cypher query directly to the driver without GraphQL
