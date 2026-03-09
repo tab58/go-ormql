@@ -30,7 +30,7 @@ func (t *Translator) translateMergeFieldSplit(field *ast.Field, scope *paramScop
 	matchKeyNames := extractMergeMatchKeyNames(inputArg, scope, node)
 	matchParts := buildMergeMatchParts(matchKeyNames)
 
-	onCreateParts := buildOnCreateSet(node)
+	onCreateParts := buildOnCreateSet(node, matchKeyNames)
 	onMatchParts := buildOnMatchSet(node)
 
 	// --- Build FOREACH write query ---
@@ -89,7 +89,7 @@ func (t *Translator) translateMergeField(field *ast.Field, scope *paramScope) (s
 	matchKeyNames := extractMergeMatchKeyNames(inputArg, scope, node)
 	matchParts := buildMergeMatchParts(matchKeyNames)
 
-	onCreateParts := buildOnCreateSet(node)
+	onCreateParts := buildOnCreateSet(node, matchKeyNames)
 	onMatchParts := buildOnMatchSet(node)
 
 	// Find the response field for projection
@@ -176,15 +176,24 @@ func buildMergeMatchParts(matchKeyNames []string) []string {
 }
 
 // buildOnCreateSet builds ON CREATE SET parts for a merge mutation.
-// ID fields get randomUUID(), all other fields get item.onCreate.fieldName.
-func buildOnCreateSet(node schema.NodeDefinition) []string {
+// ID fields get randomUUID(), match keys are skipped (already set by MERGE pattern),
+// all other fields get item.onCreate.fieldName.
+func buildOnCreateSet(node schema.NodeDefinition, matchKeyNames []string) []string {
+	matchKeys := make(map[string]struct{}, len(matchKeyNames))
+	for _, k := range matchKeyNames {
+		matchKeys[k] = struct{}{}
+	}
+
 	var parts []string
 	for _, f := range node.Fields {
 		if f.IsID {
 			parts = append(parts, fmt.Sprintf("n.%s = randomUUID()", f.Name))
-		} else {
-			parts = append(parts, fmt.Sprintf("n.%s = item.onCreate.%s", f.Name, f.Name))
+			continue
 		}
+		if _, isMatch := matchKeys[f.Name]; isMatch {
+			continue // already set by the MERGE pattern
+		}
+		parts = append(parts, fmt.Sprintf("n.%s = item.onCreate.%s", f.Name, f.Name))
 	}
 	return parts
 }
@@ -223,19 +232,15 @@ func (t *Translator) translateConnectFieldSplit(field *ast.Field, scope *paramSc
 		return "", "", "", err
 	}
 
-	// Extract AST structure for from/to fields from the first input item.
-	var fromInputVal, toInputVal *ast.Value
-	if inputArg.Value != nil && len(inputArg.Value.Children) > 0 {
-		firstItem := inputArg.Value.Children[0].Value
-		fromInputVal = findASTChild(firstItem, "from")
-		toInputVal = findASTChild(firstItem, "to")
-	}
+	// Extract from/to field names from AST or resolved variables.
+	fromFields := extractConnectFieldNames(inputArg, scope, "from")
+	toFields := extractConnectFieldNames(inputArg, scope, "to")
 
 	// --- Build write query (no CALL wrapper, no RETURN) ---
 	var writeSB strings.Builder
 	fmt.Fprintf(&writeSB, "UNWIND %s AS item", inputParam)
-	writeConnectMatch(&writeSB, "from", fromNode, fromInputVal, "item.from")
-	writeConnectMatch(&writeSB, "to", toNode, toInputVal, "item.to")
+	writeConnectMatch(&writeSB, "from", fromNode, fromFields, "item.from")
+	writeConnectMatch(&writeSB, "to", toNode, toFields, "item.to")
 
 	mergePattern := buildRelPattern("from", "r", rel.RelType, "to", rel.Direction)
 	fmt.Fprintf(&writeSB, " MERGE %s", mergePattern)
@@ -286,18 +291,13 @@ func (t *Translator) translateConnectField(field *ast.Field, scope *paramScope) 
 	sb.WriteString("CALL { ")
 	fmt.Fprintf(&sb, "UNWIND %s AS item", inputParam)
 
-	// Extract the AST structure for from/to fields from the first input item.
-	// The input is a list; the first item's children tell us which fields the user provided.
-	var fromInputVal, toInputVal *ast.Value
-	if inputArg.Value != nil && len(inputArg.Value.Children) > 0 {
-		firstItem := inputArg.Value.Children[0].Value
-		fromInputVal = findASTChild(firstItem, "from")
-		toInputVal = findASTChild(firstItem, "to")
-	}
+	// Extract from/to field names from AST or resolved variables.
+	fromFields := extractConnectFieldNames(inputArg, scope, "from")
+	toFields := extractConnectFieldNames(inputArg, scope, "to")
 
 	// Build FROM and TO MATCH with WHERE from user-provided input fields only
-	writeConnectMatch(&sb, "from", fromNode, fromInputVal, "item.from")
-	writeConnectMatch(&sb, "to", toNode, toInputVal, "item.to")
+	writeConnectMatch(&sb, "from", fromNode, fromFields, "item.from")
+	writeConnectMatch(&sb, "to", toNode, toFields, "item.to")
 
 	// Build MERGE with correct direction
 	mergePattern := buildRelPattern("from", "r", rel.RelType, "to", rel.Direction)
@@ -341,20 +341,55 @@ func (t *Translator) findRelationshipByConnectName(fieldName string) (schema.Rel
 
 // writeConnectMatch writes a MATCH + WHERE clause for a connect mutation endpoint.
 // variable is the Cypher variable name (e.g., "from"), node provides the label,
-// inputVal provides the AST children whose field names drive the WHERE predicates,
-// and itemPath is the input path prefix (e.g., "item.from").
+// fieldNames provides the field names to use in WHERE predicates (extracted from
+// AST or resolved variables), and itemPath is the input path prefix (e.g., "item.from").
 //
 // Only fields present in the input are included in WHERE — omitted fields are not
 // matched, avoiding null comparisons that would always fail in Cypher.
-func writeConnectMatch(sb *strings.Builder, variable string, node schema.NodeDefinition, inputVal *ast.Value, itemPath string) {
+func writeConnectMatch(sb *strings.Builder, variable string, node schema.NodeDefinition, fieldNames []string, itemPath string) {
 	fmt.Fprintf(sb, " MATCH (%s:%s)", variable, node.Labels[0])
-	if inputVal == nil || len(inputVal.Children) == 0 {
+	if len(fieldNames) == 0 {
 		return
 	}
 	sb.WriteString(" WHERE")
 	var preds []string
-	for _, child := range inputVal.Children {
-		preds = append(preds, fmt.Sprintf(" %s.%s = %s.%s", variable, child.Name, itemPath, child.Name))
+	for _, name := range fieldNames {
+		preds = append(preds, fmt.Sprintf(" %s.%s = %s.%s", variable, name, itemPath, name))
 	}
 	sb.WriteString(strings.Join(preds, " AND"))
+}
+
+// extractConnectFieldNames extracts the field names for a connect mutation's
+// "from" or "to" input object. Tries AST children first (inline values), then
+// falls back to resolved variables. This ensures WHERE clauses are generated
+// even when input is passed as a variable reference (e.g., $input).
+func extractConnectFieldNames(inputArg *ast.Argument, scope *paramScope, key string) []string {
+	// Try AST children first (inline values)
+	if inputArg.Value != nil && len(inputArg.Value.Children) > 0 {
+		firstItem := inputArg.Value.Children[0].Value
+		subVal := findASTChild(firstItem, key)
+		if subVal != nil && len(subVal.Children) > 0 {
+			names := make([]string, 0, len(subVal.Children))
+			for _, child := range subVal.Children {
+				names = append(names, child.Name)
+			}
+			return names
+		}
+	}
+
+	// Try resolved variables
+	resolved := resolveValue(inputArg.Value, scope.variables)
+	if items, ok := resolved.([]any); ok && len(items) > 0 {
+		if first, ok := items[0].(map[string]any); ok {
+			if subMap, ok := first[key].(map[string]any); ok {
+				names := make([]string, 0, len(subMap))
+				for k := range subMap {
+					names = append(names, k)
+				}
+				return names
+			}
+		}
+	}
+
+	return nil
 }

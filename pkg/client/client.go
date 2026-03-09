@@ -16,6 +16,9 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+// defaultRawBatchSize is the default batch size for ExecuteRawBatch.
+const defaultRawBatchSize = 50
+
 // errNilDriver is the panic message when New() is called with a nil driver.
 const errNilDriver = "gormql: driver must not be nil"
 
@@ -203,6 +206,65 @@ func (c *Client) ExecuteRaw(ctx context.Context, query string, params map[string
 		c.logger.Debug("cypher.executeRaw", "query", query, "params", params)
 	}
 	return c.drv.ExecuteWrite(ctx, cypher.Statement{Query: query, Params: params})
+}
+
+// ExecuteRawBatch batches multiple raw Cypher executions using UNWIND for
+// efficiency. Instead of N individual round-trips, sends ceil(N/batchSize)
+// UNWIND queries.
+//
+// The query parameter should be a Cypher statement that references fields via
+// the "item" variable (from UNWIND). The method prepends "UNWIND $items AS item"
+// automatically.
+//
+// Example query: "MATCH (a:File {path: item.from_path}) MATCH (b:Function {name: item.to_name}) CREATE (a)-[:DEFINES]->(b)"
+//
+// Items is a slice of parameter maps, one per UNWIND row.
+// batchSize controls how many items are sent per query. If <= 0, uses defaultRawBatchSize.
+func (c *Client) ExecuteRawBatch(ctx context.Context, query string, items []map[string]any, batchSize int) error {
+	if c.isClosed() {
+		return errClientClosed
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = defaultRawBatchSize
+	}
+
+	unwindQuery := "UNWIND $items AS item " + query
+
+	for i := 0; i < len(items); i += batchSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		end := i + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[i:end]
+
+		anyBatch := make([]any, len(batch))
+		for j, item := range batch {
+			anyBatch[j] = item
+		}
+
+		if c.logger != nil {
+			c.logger.Debug("cypher.executeRawBatch",
+				"query", unwindQuery,
+				"batch", fmt.Sprintf("%d-%d/%d", i+1, end, len(items)),
+			)
+		}
+
+		_, err := c.drv.ExecuteWrite(ctx, cypher.Statement{
+			Query:  unwindQuery,
+			Params: map[string]any{"items": anyBatch},
+		})
+		if err != nil {
+			return fmt.Errorf("batch %d-%d failed: %w", i+1, end, err)
+		}
+	}
+	return nil
 }
 
 // Close releases the underlying driver resources and marks the client as closed.
